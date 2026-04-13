@@ -1,0 +1,4 @@
+httpx
+rich
+duckduckgo-search
+pyyaml
