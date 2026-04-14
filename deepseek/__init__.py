@@ -1,14 +1,18 @@
-# DeepSeek CLI v4 — Package Init
+# DeepSeek CLI v5 — Cleanup old v2 directories on import
 
-import os, shutil
+import shutil
+from pathlib import Path
 
-_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
-_V2_DIRS = ['tools', 'ui', 'agent', 'memory', 'config', 'llm', 'providers']
+def _cleanup_old_dirs():
+    """Remove stale v2 subdirectories from package upgrades."""
+    pkg_dir = Path(__file__).parent
+    old_dirs = ['core', 'ui', 'cli', 'tools']
+    for d in old_dirs:
+        target = pkg_dir / d
+        if target.is_dir():
+            try:
+                shutil.rmtree(target)
+            except Exception:
+                pass
 
-for d in _V2_DIRS:
-    p = os.path.join(_PKG_DIR, d)
-    if os.path.isdir(p) and not os.path.exists(os.path.join(p, '__init__.py')):
-        try:
-            shutil.rmtree(p)
-        except Exception:
-            pass
+_cleanup_old_dirs()

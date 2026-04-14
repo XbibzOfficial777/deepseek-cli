@@ -1,5 +1,6 @@
-# DeepSeek CLI v4 — Multi-Provider Configuration
+# DeepSeek CLI v5 — Multi-Provider Configuration
 # Manages 7 AI providers with YAML config file, API keys, and model selection
+# NO TOOL LIMITS — all tools available at all times
 
 import os
 import yaml
@@ -27,17 +28,18 @@ DEFAULT_PROVIDERS = {
         'get_key_url': 'https://openrouter.ai/keys',
         'extra_headers': {
             'HTTP-Referer': 'https://deepseek-cli.local',
-            'X-Title': 'DeepSeek CLI v4',
+            'X-Title': 'DeepSeek CLI v5.5',
         },
         'popular_models': [
             'deepseek/deepseek-r1-0528:free',
             'deepseek/deepseek-chat-v3-0324:free',
             'meta-llama/llama-4-maverick:free',
-            'google/gemini-2.0-flash-exp:free',
+            'google/gemini-2.5-flash-preview:free',
             'qwen/qwen3-235b-a22b:free',
-            'mistralai/mistral-small-3.1-24b-instruct:free',
             'anthropic/claude-sonnet-4',
             'openai/gpt-4o',
+            'openai/gpt-4.1-mini',
+            'google/gemini-2.5-pro-preview-05-06',
         ],
     },
     'gemini': {
@@ -45,40 +47,40 @@ DEFAULT_PROVIDERS = {
         'type': 'gemini',
         'base_url': 'https://generativelanguage.googleapis.com/v1beta',
         'api_key_env': 'GEMINI_API_KEY',
-        'default_model': 'gemini-2.0-flash',
+        'default_model': 'gemini-2.5-flash-preview-05-20',
         'enabled': True,
         'supports_tools': True,
         'supports_streaming': True,
         'has_free_models': True,
         'get_key_url': 'https://aistudio.google.com/apikey',
         'popular_models': [
+            'gemini-2.5-flash-preview-05-20',
+            'gemini-2.5-pro-preview-05-06',
             'gemini-2.0-flash',
             'gemini-2.0-flash-lite',
             'gemini-1.5-flash',
             'gemini-1.5-pro',
-            'gemini-2.5-pro-preview-05-06',
         ],
     },
     'huggingface': {
         'name': 'HuggingFace',
         'type': 'huggingface',
-        'base_url': 'https://router.huggingface.co',
+        'base_url': 'https://api-inference.huggingface.co',
         'api_key_env': 'HUGGINGFACE_API_KEY',
-        'default_model': 'mistralai/Mistral-7B-Instruct-v0.3',
+        'default_model': 'Qwen/Qwen2.5-72B-Instruct',
         'enabled': True,
         'supports_tools': True,
         'supports_streaming': True,
         'has_free_models': True,
         'get_key_url': 'https://huggingface.co/settings/tokens',
         'popular_models': [
-            'mistralai/Mistral-7B-Instruct-v0.3',
-            'meta-llama/Meta-Llama-3-8B-Instruct',
-            'microsoft/Phi-3-mini-4k-instruct',
-            'google/gemma-2-2b-it',
-            'HuggingFaceH4/zephyr-7b-beta',
             'Qwen/Qwen2.5-72B-Instruct',
             'NousResearch/Hermes-3-Llama-3.1-8B',
             'meta-llama/Llama-3.3-70B-Instruct',
+            'mistralai/Mistral-7B-Instruct-v0.3',
+            'HuggingFaceH4/zephyr-7b-beta',
+            'microsoft/Phi-3-mini-4k-instruct',
+            'google/gemma-2-2b-it',
         ],
     },
     'openai': {
@@ -86,18 +88,19 @@ DEFAULT_PROVIDERS = {
         'type': 'openai_compatible',
         'base_url': 'https://api.openai.com/v1',
         'api_key_env': 'OPENAI_API_KEY',
-        'default_model': 'gpt-4o-mini',
+        'default_model': 'gpt-4.1-mini',
         'enabled': True,
         'supports_tools': True,
         'supports_streaming': True,
         'has_free_models': False,
         'get_key_url': 'https://platform.openai.com/api-keys',
         'popular_models': [
-            'gpt-4o-mini',
-            'gpt-4o',
             'gpt-4.1-mini',
             'gpt-4.1',
+            'gpt-4o',
+            'gpt-4o-mini',
             'o3-mini',
+            'o4-mini',
         ],
     },
     'anthropic': {
@@ -158,10 +161,11 @@ DEFAULT_PROVIDERS = {
 }
 
 # Agent settings
-MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 12       # Smart limit — agent stops at 12 rounds (was 99)
 MAX_TOKENS = 4096
 TEMPERATURE = 0.7
 TIMEOUT = 120
+TOOL_TIMEOUT = 15          # Per-tool timeout in seconds (v5.5)
 
 # UI
 BANNER_COLOR = 'cyan'
@@ -193,7 +197,7 @@ class ConfigManager:
 
         # Create default config
         config = {
-            'version': 4,
+            'version': 5,
             'active_provider': 'openrouter',
             'api_keys': {},
             'models': {},
@@ -204,7 +208,7 @@ class ConfigManager:
         return config
 
     def _migrate_legacy(self, config: dict):
-        """Migrate v3 ~/.deepseek_api_key to new config."""
+        """Migrate old configs to new format."""
         if LEGACY_KEY_FILE.exists():
             try:
                 key = LEGACY_KEY_FILE.read_text().strip()
@@ -242,7 +246,6 @@ class ConfigManager:
         pid = provider_id or self.active_provider
         stored = self.config.get('providers', {}).get(pid, {})
         defaults = DEFAULT_PROVIDERS.get(pid, {})
-        # Merge: defaults as base, stored overrides
         merged = dict(defaults)
         merged.update(stored)
         return merged
@@ -330,7 +333,7 @@ class ConfigManager:
 
 
 def mask_key(key: str) -> str:
-    """Mask API key for display: sk-or-v1-abc...xyz -> sk-or-v1-****...xyz"""
+    """Mask API key for display."""
     if not key:
         return '(none)'
     if len(key) <= 10:

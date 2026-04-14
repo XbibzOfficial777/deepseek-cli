@@ -1,4 +1,12 @@
 httpx
 rich
-duckduckgo-search
+ddgs
 pyyaml
+PyPDF2
+reportlab
+python-docx
+Pillow
+beautifulsoup4
+lxml
+mcp
+pydantic

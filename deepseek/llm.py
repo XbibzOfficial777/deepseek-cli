@@ -1,7 +1,3 @@
-# DeepSeek CLI v4 — Backward Compatibility LLM Module
-# All LLM functions are now in providers.py
-
-from .providers import chat_stream, fetch_models, create_provider
-
-# Re-export for any code that imports from .llm
-__all__ = ['chat_stream', 'fetch_models', 'create_provider']
+# DeepSeek CLI v5 — Backward compatibility shim
+# Re-exports from providers module
+from .providers import create_provider, fetch_models, chat_stream

@@ -1,353 +1,873 @@
-# DeepSeek CLI v4 — REPL (Read-Eval-Print Loop)
-# Multi-provider interactive interface with all commands
+# DeepSeek CLI v5.3 — Interactive REPL
+# Main loop: reads user input, handles slash commands, delegates to Agent
+# Features: Ctrl+P settings panel, arrow-key select menus, command history
 
-import sys
 import os
-
+import sys
+import datetime
 from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
+from rich.table import Table
+from rich import box
 
-from .config import cfg, mask_key, DEFAULT_PROVIDERS
+from .config import cfg, MAX_TOOL_ROUNDS, mask_key, DEFAULT_PROVIDERS
 from .memory import Memory
 from .toolkit import ToolRegistry
-from .providers import create_provider, fetch_models as _fetch_models
+from .providers import create_provider
 from .agent import Agent
-from . import ui
+from .ui import (console, show_banner, show_welcome, show_help,
+                 show_version, with_spinner, interactive_select,
+                 prompt_input, CTRL_P_SENTINEL)
 
-console = Console()
-
-
-def _build_provider(provider_id: str):
-    """Build a provider instance from config."""
-    pconfig = cfg.get_provider_config(provider_id)
-    api_key = cfg.get_api_key(provider_id)
-    return create_provider(provider_id, pconfig, api_key)
-
-
-def _get_popular_models(provider_id: str) -> list:
-    """Get popular models list for a provider."""
-    pconfig = cfg.get_provider_config(provider_id)
-    popular = pconfig.get('popular_models', [])
-    return [{'id': m, 'name': m, 'free': pconfig.get('has_free_models', False)}
-            for m in popular]
+VERSION = '5.5'
+VERSION_BANNER = 'DeepSeek CLI Agent v5.5'
+VERSION_FEATURES = 'Multi-Provider | 7 AI Services | 65+ Tools | Real-Time Stream | Web Browser | Smart Loop'
 
 
 def main():
-    """Main REPL entry point."""
+    """Main entry point — start the REPL."""
+    show_banner()
+
+    # Initialize components
     memory = Memory()
     tools = ToolRegistry()
 
-    active_pid = cfg.active_provider
-    provider = _build_provider(active_pid)
-    current_model = cfg.get_provider_model(active_pid)
-    thinking_visible = True
+    # Setup provider
+    provider_id = cfg.active_provider
+    provider_config = cfg.get_provider_config(provider_id)
+    api_key = cfg.get_api_key(provider_id)
+    model = cfg.get_provider_model(provider_id)
 
-    api_key = cfg.get_api_key(active_pid)
+    provider = create_provider(provider_id, provider_config, api_key)
+    agent = Agent(memory, tools, provider, model, thinking_visible=True)
+
+    # Welcome
+    show_welcome(provider.name, model, bool(api_key))
+
     if not api_key:
-        pconfig = cfg.get_provider_config(active_pid)
-        console.print(f'[red]No API key for {pconfig["name"]}![/red]')
-        console.print(f'  Set: /apikey set')
-        console.print(f'  Or switch: /provider')
-        console.print(f'  Get key: {pconfig.get("get_key_url", "")}')
+        console.print(f'  [yellow]No API key set. Use [bold]/key[/bold] or [bold]Ctrl+P[/bold] to set one.[/yellow]')
+        console.print(f'  [dim]Get a key: {provider_config.get("get_key_url", "")}[/dim]')
+        console.print()
 
-    agent = Agent(memory, tools, provider, current_model, thinking_visible)
+    console.print('  [dim]Press Ctrl+P to open settings panel.[/dim]')
+    console.print()
 
-    models = []
-    if api_key:
-        with ui.with_spinner(f'Fetching models from {provider.name}...'):
-            models = _fetch_models(provider)
-        if models:
-            console.print(f'  [green]  Loaded {len(models)} models[/green]')
-        else:
-            console.print(f'  [yellow]  Could not load models (offline or no list API)[/yellow]')
-            models = _get_popular_models(active_pid)
+    # ══════════════════════════════════════
+    # MAIN LOOP
+    # ══════════════════════════════════════
 
-    ui.show_banner(provider.name, current_model, thinking_visible)
+    while True:
+        user_input = prompt_input()
 
-    COMMANDS = [
-        {'name': '/help',      'desc': 'Show help with live search'},
-        {'name': '/provider',  'desc': 'Switch AI provider (interactive)'},
-        {'name': '/providers', 'desc': 'List all providers and status'},
-        {'name': '/apikey',    'desc': 'View/change API key (current provider)'},
-        {'name': '/apikey set','desc': 'Set API key for current provider'},
-        {'name': '/model',     'desc': 'Change AI model (interactive)'},
-        {'name': '/tools',     'desc': 'Show all 26 available tools'},
-        {'name': '/thinking',  'desc': 'Toggle thinking on/off'},
-        {'name': '/clear',     'desc': 'Clear conversation history'},
-        {'name': '/export',    'desc': 'Export chat to file'},
-        {'name': '/info',      'desc': 'Show current session info'},
-        {'name': '/compact',   'desc': 'Compact conversation (keep last N)'},
-        {'name': '/system',    'desc': 'Set custom system prompt'},
-        {'name': '/quit',      'desc': 'Exit the CLI'},
-        {'name': '/version',   'desc': 'Show version info'},
-    ]
-
-    running = True
-
-    while running:
-        # Read input
-        try:
-            user_input = ui.read_input_line(
-                prompt='\nYou > ',
-                palette_commands=COMMANDS
-            )
-        except EOFError:
-            break
-        except KeyboardInterrupt:
-            console.print('\n  [dim]Use /quit to exit[/dim]')
+        # ── Ctrl+P → Settings Panel ──
+        if user_input == CTRL_P_SENTINEL:
+            open_settings_panel(agent, memory)
             continue
 
-        # Process
-        try:
-            user_input = user_input.strip()
-            if not user_input:
-                continue
-
-            # ── Commands ──
-            if user_input.startswith('/'):
-                parts = user_input.split(None, 1)
-                cmd = parts[0].lower()
-                cmd_args = parts[1] if len(parts) > 1 else ''
-
-                # /provider
-                if cmd == '/provider':
-                    all_p = cfg.get_all_providers()
-                    new_pid = ui.select_provider_interactive(all_p, active_pid)
-                    if new_pid != active_pid:
-                        active_pid = new_pid
-                        cfg.active_provider = active_pid
-                        provider = _build_provider(active_pid)
-                        current_model = cfg.get_provider_model(active_pid)
-                        api_key = cfg.get_api_key(active_pid)
-                        agent.set_provider(provider)
-                        agent.set_model(current_model)
-                        models = []
-                        if api_key:
-                            with ui.with_spinner(f'Fetching models from {provider.name}...'):
-                                models = _fetch_models(provider)
-                            if not models:
-                                models = _get_popular_models(active_pid)
-                        console.print(f'  [bold green]  Switched to {provider.name}[/bold green]')
-                        if not api_key:
-                            console.print(f'  [yellow]  No API key for {provider.name}[/yellow]')
-                            console.print(f'  [dim]  Use /apikey set[/dim]')
-                    else:
-                        console.print(f'  [dim]  Unchanged: {provider.name}[/dim]')
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /providers
-                elif cmd == '/providers':
-                    ui.show_providers_table(cfg.get_all_providers())
-                    console.print('  [dim]Use /provider to switch[/dim]')
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /apikey
-                elif cmd == '/apikey':
-                    pconfig = cfg.get_provider_config(active_pid)
-                    if not cmd_args:
-                        info = Text()
-                        info.append(f'  {pconfig["name"]} — API Key\n', style='bold cyan')
-                        cur_key = cfg.get_api_key(active_pid)
-                        if cur_key:
-                            info.append('  Status: ', style='dim')
-                            info.append('Active\n', style='bold green')
-                            info.append('  Key:    ', style='dim')
-                            info.append(mask_key(cur_key) + '\n', style='yellow')
-                        else:
-                            info.append('  Status: ', style='dim')
-                            info.append('Not set\n', style='bold red')
-                        info.append('\n  Commands:\n', style='bold')
-                        info.append('    /apikey set          ', style='dim')
-                        info.append('Set key (masked input)\n', style='cyan')
-                        info.append('    /apikey set gemini   ', style='dim')
-                        info.append('Set key for specific provider\n', style='cyan')
-                        info.append('    /apikey reset        ', style='dim')
-                        info.append('Delete saved key\n', style='cyan')
-                        info.append('\n  Get key: ', style='dim')
-                        info.append(f'{pconfig.get("get_key_url", "")}\n', style='bold blue')
-                        console.print()
-                        console.print(Panel(info, border_style='cyan'))
-                    elif cmd_args.lower().startswith('set'):
-                        set_args = cmd_args[3:].strip()
-                        target_pid = set_args if set_args else active_pid
-                        target_pconfig = cfg.get_provider_config(target_pid)
-                        console.print()
-                        console.print(
-                            f'  [cyan]Enter API key for {target_pconfig["name"]}:[/cyan]  '
-                            f'[dim]{target_pconfig.get("get_key_url", "")}[/dim]  '
-                            f'[dim]ESC to cancel[/dim]'
-                        )
-                        new_key = ui.read_password('  Key: ')
-                        if new_key:
-                            cfg.set_api_key(new_key, target_pid)
-                            console.print(f'  [green]  Saved for {target_pconfig["name"]}[/green]')
-                            console.print(f'  [green]  Key: {mask_key(new_key)}[/green]')
-                            if target_pid == active_pid:
-                                provider = _build_provider(active_pid)
-                                agent.set_provider(provider)
-                        else:
-                            console.print('  [dim]  Cancelled[/dim]')
-                    elif cmd_args.lower() == 'reset':
-                        if cfg.delete_api_key(active_pid):
-                            console.print(f'  [yellow]  Key deleted for {pconfig["name"]}[/yellow]')
-                        else:
-                            console.print('  [dim]  No saved key[/dim]')
-                    else:
-                        console.print('  [dim]  Usage: /apikey set | /apikey reset | /apikey[/dim]')
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /help
-                elif cmd == '/help':
-                    ui.show_help_with_search(COMMANDS)
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /model
-                elif cmd == '/model':
-                    if not models:
-                        if cfg.get_api_key(active_pid):
-                            with ui.with_spinner(f'Fetching models...'):
-                                models = _fetch_models(provider)
-                        if not models:
-                            models = _get_popular_models(active_pid)
-                    if models:
-                        new_model = ui.select_model_interactive(models, current_model)
-                        if new_model != current_model:
-                            current_model = new_model
-                            cfg.set_provider_model(current_model, active_pid)
-                            agent.set_model(current_model)
-                            console.print(f'  [green]  Model: {current_model}[/green]')
-                        else:
-                            console.print(f'  [dim]  Unchanged: {current_model}[/dim]')
-                    else:
-                        console.print('[red]  No models. Set API key first.[/red]')
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /tools
-                elif cmd == '/tools':
-                    ui.show_all_tools(tools.get_tool_list())
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /thinking
-                elif cmd == '/thinking':
-                    thinking_visible = not thinking_visible
-                    agent.set_thinking(thinking_visible)
-                    s = 'ON' if thinking_visible else 'OFF'
-                    c = 'green' if thinking_visible else 'red'
-                    console.print(f'  [bold {c}]  Thinking: {s}[/bold {c}]')
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /clear
-                elif cmd == '/clear':
-                    memory.clear()
-                    console.print('  [green]  Conversation cleared[/green]')
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /export
-                elif cmd == '/export':
-                    export_data = memory.export_text()
-                    export_path = cmd_args or os.path.expanduser('~/deepseek-chat-export.txt')
-                    try:
-                        with open(export_path, 'w') as f:
-                            f.write(export_data)
-                        console.print(f'  [green]  Exported to: {export_path}[/green]')
-                    except Exception as e:
-                        console.print(f'  [red]  Export failed: {e}[/red]')
-
-                # /info
-                elif cmd == '/info':
-                    info = Text()
-                    info.append('  Session Info\n', style='bold cyan')
-                    info.append('  Provider: ', style='dim')
-                    info.append(f'{provider.name}\n', style='magenta bold')
-                    info.append('  Model:    ', style='dim')
-                    info.append(current_model + '\n', style='green bold')
-                    info.append('  Messages: ', style='dim')
-                    info.append(str(memory.count()) + '\n', style='white')
-                    info.append('  Thinking: ', style='dim')
-                    ts = 'ON' if thinking_visible else 'OFF'
-                    info.append(ts + '\n',
-                                style='bold green' if thinking_visible else 'bold red')
-                    info.append('  Tools:    ', style='dim')
-                    tn = str(len(tools.tools))
-                    if provider.supports_tools:
-                        info.append(f'{tn} (active)\n', style='green')
-                    else:
-                        info.append(f'{tn} (disabled)\n', style='yellow')
-                    info.append('  Models:   ', style='dim')
-                    info.append(f'{len(models)} available\n', style='white')
-                    info.append('  API Key:  ', style='dim')
-                    key = cfg.get_api_key(active_pid)
-                    info.append(mask_key(key) + '\n',
-                                style='green' if key else 'red')
-                    console.print()
-                    console.print(Panel(info, border_style='cyan'))
-                    ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-                # /compact
-                elif cmd == '/compact':
-                    try:
-                        n = int(cmd_args) if cmd_args else 10
-                        msgs = memory.messages
-                        sys_msgs = [m for m in msgs if m['role'] == 'system']
-                        keep = sys_msgs + msgs[-(n * 2):]
-                        memory.messages = keep
-                        console.print(f'  [green]  Compacted to {n} exchanges ({len(keep)} msgs)[/green]')
-                    except ValueError:
-                        console.print('  [yellow]Usage: /compact [number][/yellow]')
-
-                # /system
-                elif cmd == '/system':
-                    if cmd_args:
-                        memory.add_system(cmd_args)
-                        console.print('  [green]  System prompt updated[/green]')
-                    else:
-                        console.print()
-                        console.print(Panel(memory.system_prompt,
-                                          title='System Prompt', border_style='cyan'))
-
-                # /quit
-                elif cmd in ('/quit', '/exit', '/q'):
-                    console.print('\n  [cyan]Goodbye![/cyan]\n')
-                    running = False
-
-                # /version
-                elif cmd == '/version':
-                    pstr = ', '.join(DEFAULT_PROVIDERS.keys())
-                    console.print()
-                    console.print('  [bold cyan]DeepSeek CLI Agent v4.0[/bold cyan]')
-                    console.print('  [dim]Multi-Provider | 7 AI Services | Agentic Loop | 26+ Tools[/dim]')
-                    console.print(f'  [dim]Providers: {pstr}[/dim]')
-                    console.print()
-
-                else:
-                    console.print(f'\n  [yellow]Unknown: {cmd}[/yellow]')
-                    console.print('  [dim]Type /help for commands[/dim]')
-
-            # ── Regular Chat ──
-            else:
-                api_key = cfg.get_api_key(active_pid)
-                if not api_key:
-                    console.print(f'  [red]No API key for {provider.name}![/red]')
-                    console.print(f'  [dim]Use /apikey set to configure[/dim]')
-                    continue
-
-                console.print()
-                result = agent.chat(user_input)
-
-                if result.get('error') and 'Max tool rounds' in result.get('error', ''):
-                    console.print(f'\n  [yellow]{result["error"]}[/yellow]')
-
-                ui.show_status(provider.name, current_model, thinking_visible, memory.count())
-
-        except KeyboardInterrupt:
-            console.print('\n  [dim]Interrupted. Type /quit to exit.[/dim]')
+        if not user_input:
             continue
+
+        # Handle slash commands
+        if user_input.startswith('/'):
+            result = handle_command(user_input, agent, memory, tools)
+            if result == 'exit':
+                break
+            continue
+
+        # Send to agent
+        try:
+            response = agent.chat(user_input)
+            if response.get('error') and not response.get('content'):
+                console.print(f'\n  [dim red]({response["error"]})[/dim red]')
+            # v5.5: Show stop reason if not natural
+            stopped_by = response.get('stopped_by', '')
+            if stopped_by and stopped_by not in ('natural', 'no_tools', None):
+                reason_map = {
+                    'max_rounds': 'Max rounds reached (12)',
+                    'loop_detected': 'Tool loop detected',
+                    'anti_stuck': 'Repeated content detected',
+                    'stream_error': 'Stream error',
+                }
+                console.print(f'  [dim yellow]Stopped: {reason_map.get(stopped_by, stopped_by)}[/dim yellow]')
+            console.print()
+        except KeyboardInterrupt:
+            console.print('\n  [dim]Interrupted.[/dim]')
+            console.print()
         except Exception as e:
-            console.print(f'\n  [red]Error: {e}[/red]')
-            console.print('  [dim]Type /help for commands[/dim]')
-            continue
+            console.print(f'\n  [bold red]Error:[/bold red] {e}')
+            console.print()
 
+
+
+
+
+def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) -> str:
+    """Handle slash commands. Returns 'exit' if user wants to quit."""
+
+    parts = cmd.strip().split(maxsplit=1)
+    command = parts[0].lower()
+    args = parts[1].strip() if len(parts) > 1 else ''
+
+    # ── /exit ─────────────────────────
+    if command in ('/exit', '/quit', '/q'):
+        console.print('\n[dim]Goodbye![/dim]')
+        return 'exit'
+
+    # ── /help ─────────────────────────
+    elif command in ('/help', '/h', '/?'):
+        show_help()
+
+    # ── /version ──────────────────────
+    elif command == '/version':
+        show_version_info()
+
+    # ── /tools ────────────────────────
+    elif command == '/tools':
+        show_tools(tools)
+
+    # ── /clear ────────────────────────
+    elif command == '/clear':
+        memory.clear()
+        console.print('  [green]Conversation cleared.[/green]')
+        console.print()
+
+    # ── /export ───────────────────────
+    elif command == '/export':
+        export_chat(memory)
+
+    # ── /system ───────────────────────
+    elif command == '/system':
+        if not args:
+            console.print(f'  [dim]Current system prompt:[/dim]')
+            console.print(f'  {memory.system_prompt[:200]}')
+            console.print(f'  [dim]Usage: /system <new prompt>[/dim]')
+        else:
+            memory.add_system(args)
+            console.print(f'  [green]System prompt updated.[/green]')
+            console.print()
+
+    # ── /provider (with optional args) ─
+    elif command == '/provider':
+        if args:
+            # Direct switch: /provider gemini or /provider 3
+            _do_switch_provider(agent, args)
+        else:
+            # Interactive arrow-key selection
+            switch_provider(agent)
+
+    # ── /model (with optional args) ──
+    elif command == '/model':
+        if args:
+            _do_switch_model(agent, args)
+        else:
+            switch_model(agent)
+
+    # ── /key ──────────────────────────
+    elif command == '/key':
+        set_api_key(agent)
+
+    # ── /models ───────────────────────
+    elif command == '/models':
+        list_models(agent)
+
+    # ── /info ─────────────────────────
+    elif command == '/info':
+        show_info(agent, memory)
+
+    # ── /thinking ─────────────────────
+    elif command == '/thinking':
+        toggle_thinking(agent)
+
+    # ── /live_search ──────────────────
+    elif command == '/live_search':
+        if not args:
+            console.print('  [yellow]Usage: /live_search <query>[/yellow]')
+            console.print('  [dim]Searches the web in real-time using multiple sources.[/dim]')
+        else:
+            do_live_search(args)
+
+    # ── /live_models ──────────────────
+    elif command == '/live_models':
+        do_live_models(agent)
+
+    # ── /search_model ─────────────────
+    elif command == '/search_model':
+        if not args:
+            do_live_models(agent)
+        else:
+            do_search_model(agent, args)
+
+    # ── /compact ──────────────────────
+    elif command == '/compact':
+        compact_memory(memory)
+        console.print(f'  [green]Conversation compacted (system + last 10).[/green]')
+        console.print()
+
+    else:
+        console.print(f'  [yellow]Unknown command: {command}[/yellow]')
+        console.print(f'  [dim]Type /help for available commands.[/dim]')
+        console.print()
+
+    return ''
+
+
+# ══════════════════════════════════════
+# SETTINGS PANEL (Ctrl+P)
+# ══════════════════════════════════════
+
+def open_settings_panel(agent, memory):
+    """
+    Full settings panel accessible via Ctrl+P.
+    Interactive menu with arrow-key navigation.
+    Loop until user cancels (Esc).
+    """
+    while True:
+        pid = cfg.active_provider
+        pconfig = cfg.get_provider_config(pid)
+        model = cfg.get_provider_model(pid)
+        has_key = bool(cfg.get_api_key(pid))
+        thinking = agent.thinking_visible
+        key_display = mask_key(cfg.get_api_key(pid))
+
+        # Build settings menu items
+        items = [
+            f'Provider     {pconfig.get("name", pid)}',
+            f'Model        {model}',
+            f'API Key      {key_display if has_key else "(not set)"}',
+            f'Thinking     {"ON" if thinking else "OFF"}',
+            'System Prompt  Edit system prompt',
+            'Config Info    Show configuration',
+            'Clear Chat     Clear conversation',
+        ]
+
+        idx = interactive_select(items, title='-- Settings Panel --', active_index=0)
+
+        if idx == -1:
+            # Esc — back to chat
+            break
+
+        elif idx == 0:
+            # Switch provider
+            _settings_switch_provider(agent)
+
+        elif idx == 1:
+            # Switch model
+            _settings_switch_model(agent)
+
+        elif idx == 2:
+            # Set API key
+            console.print()
+            set_api_key(agent)
+
+        elif idx == 3:
+            # Toggle thinking
+            toggle_thinking(agent)
+
+        elif idx == 4:
+            # Edit system prompt
+            console.print()
+            _settings_edit_system(memory)
+
+        elif idx == 5:
+            # Show info
+            console.print()
+            show_info(agent, memory)
+
+        elif idx == 6:
+            # Clear conversation
+            memory.clear()
+            console.print('  [green]Conversation cleared.[/green]')
+            console.print()
+
+        console.print()
+
+
+def _settings_switch_provider(agent):
+    """Switch provider from settings panel (interactive select)."""
+    providers = cfg.get_all_providers()
+    if not providers:
+        console.print('  [red]No providers available.[/red]')
+        return
+
+    items = []
+    active_idx = 0
+    for i, p in enumerate(providers):
+        pid = p['id']
+        name = p.get('name', pid)
+        key_display = mask_key(cfg.get_api_key(pid))
+        free = ' [FREE]' if p.get('has_free_models') else ''
+        active = '  << active' if p.get('active') else ''
+        items.append(f'{name}{free}  (key: {key_display}){active}')
+        if p.get('active'):
+            active_idx = i
+
+    idx = interactive_select(items, title='-- Select Provider --', active_index=active_idx)
+    if idx >= 0:
+        _do_switch_provider(agent, providers[idx]['id'])
+    else:
+        console.print('  [dim]Cancelled.[/dim]')
+
+
+def _settings_switch_model(agent):
+    """Switch model from settings panel (interactive select)."""
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    popular = pconfig.get('popular_models', [])
+    current = cfg.get_provider_model(pid)
+
+    if not popular:
+        console.print(f'  [yellow]No models configured for {pconfig.get("name", pid)}.[/yellow]')
+        return
+
+    items = []
+    active_idx = 0
+    for i, m in enumerate(popular):
+        active = '  << active' if m == current else ''
+        items.append(f'{m}{active}')
+        if m == current:
+            active_idx = i
+
+    # Add "Fetch Live Models" option at the end
+    items.append('>>> Fetch Live Models from API <<<')
+
+    idx = interactive_select(items, title=f'-- Select Model ({pconfig.get("name", pid)}) --',
+                             active_index=active_idx)
+    if idx < 0:
+        console.print('  [dim]Cancelled.[/dim]')
+    elif idx == len(popular):
+        # User selected "Fetch Live Models"
+        _do_live_model_select(agent)
+    else:
+        _do_switch_model(agent, popular[idx])
+
+
+def _settings_edit_system(memory):
+    """Edit system prompt from settings panel."""
+    console.print(f'  [dim]Current system prompt:[/dim]')
+    current = memory.system_prompt
+    if len(current) > 300:
+        console.print(f'  {current[:300]}...')
+    else:
+        console.print(f'  {current}')
+    console.print()
+
+    try:
+        new_prompt = console.input('  [bold]New system prompt (Enter to keep current):[/bold] ').strip()
+    except (KeyboardInterrupt, EOFError):
+        console.print('\n  [dim]Cancelled.[/dim]')
+        return
+
+    if new_prompt:
+        memory.add_system(new_prompt)
+        console.print(f'  [green]System prompt updated.[/green]')
+
+
+# ══════════════════════════════════════
+# COMMAND IMPLEMENTATIONS
+# ══════════════════════════════════════
+
+def show_version_info():
+    """Display version info."""
+    table = Table(box=box.SIMPLE, show_header=False, border_style='cyan')
+    table.add_column('Key', style='bold cyan', min_width=20)
+    table.add_column('Value', style='white')
+    table.add_row('Version', VERSION_BANNER)
+    table.add_row('Features', VERSION_FEATURES)
+    table.add_row('Providers', 'OpenRouter, Gemini, HuggingFace, OpenAI, Anthropic, Groq, Together')
+    table.add_row('Max Tool Rounds', f'{MAX_TOOL_ROUNDS} (smart loop)')
+    table.add_row('Loop Detection', f'max_same_tool={3}, anti_stuck=ON')
+    table.add_row('Validation', 'Pydantic (with fallback)')
+    table.add_row('Logging', '~/.deepseek-cli/logs/')
+    table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, Video, APK, Live Search, Browser')
+    console.print(table)
+    console.print()
+
+
+def show_tools(tools: ToolRegistry):
+    """Display all available tools."""
+    tool_list = tools.get_tool_list()
+    console.print(f'  [bold cyan]{len(tool_list)} tools available[/bold cyan]')
+    console.print()
+
+    # Group tools by category
+    categories = {
+        'File': ['read_file', 'write_file', 'list_files', 'delete_file', 'file_info'],
+        'Web': ['web_search', 'web_fetch'],
+        'Code': ['run_code', 'run_shell', 'install_package'],
+        'System': ['system_info', 'process_list', 'disk_usage', 'network_info', 'env_vars'],
+        'Math': ['calculate', 'unit_convert'],
+        'Utility': ['timestamp', 'text_transform', 'json_parse', 'generate_uuid',
+                    'random_number', 'base64_tool', 'regex_test', 'sort_data', 'count_text'],
+        'PDF': ['read_pdf', 'create_pdf', 'pdf_edit'],
+        'DOCX': ['read_docx', 'create_docx', 'docx_info'],
+        'Image': ['image_view', 'image_info'],
+        'Video': ['video_info', 'video_play'],
+        'APK': ['apk_analyze'],
+        'Search': ['live_search', 'search_models'],
+    }
+
+    for cat_name, cat_tools in categories.items():
+        console.print(f'  [bold yellow]{cat_name}[/bold yellow]')
+        tool_map = {t['name']: t['description'] for t in tool_list}
+        for tool_name in cat_tools:
+            if tool_name in tool_map:
+                desc = tool_map[tool_name]
+                if len(desc) > 80:
+                    desc = desc[:77] + '...'
+                console.print(f'    [green]{tool_name}[/green]  [dim]{desc}[/dim]')
+        console.print()
+
+    console.print(f'  [dim]All {len(tool_list)} tools available — NO LIMITS[/dim]')
+    console.print()
+
+
+def export_chat(memory: Memory):
+    """Export conversation to text file."""
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'deepseek_chat_{timestamp}.txt'
+    try:
+        content = memory.export_text()
+        with open(filename, 'w') as f:
+            f.write(content)
+        console.print(f'  [green]Chat exported to {filename}[/green]')
+    except Exception as e:
+        console.print(f'  [red]Export failed: {e}[/red]')
+    console.print()
+
+
+def switch_provider(agent: Agent):
+    """Interactive provider switch — arrow-key selection menu."""
+    providers = cfg.get_all_providers()
+    if not providers:
+        console.print('  [red]No providers available.[/red]')
+        console.print()
+        return
+
+    items = []
+    active_idx = 0
+    for i, p in enumerate(providers):
+        pid = p['id']
+        name = p.get('name', pid)
+        key_display = mask_key(cfg.get_api_key(pid))
+        free = ' [FREE]' if p.get('has_free_models') else ''
+        active = '  << active' if p.get('active') else ''
+        items.append(f'{name}{free}  (key: {key_display}){active}')
+        if p.get('active'):
+            active_idx = i
+
+    idx = interactive_select(items, title='-- Select Provider --', active_index=active_idx)
+
+    if idx >= 0:
+        _do_switch_provider(agent, providers[idx]['id'])
+    else:
+        console.print('  [dim]Cancelled.[/dim]')
+        console.print()
+
+
+def _do_switch_provider(agent: Agent, provider_id: str):
+    """Actually switch the provider."""
+    if provider_id not in DEFAULT_PROVIDERS:
+        # Try number
+        providers = cfg.get_all_providers()
+        try:
+            idx = int(provider_id) - 1
+            if 0 <= idx < len(providers):
+                provider_id = providers[idx]['id']
+            else:
+                console.print(f'  [red]Invalid provider: {provider_id}[/red]')
+                return
+        except ValueError:
+            console.print(f'  [red]Unknown provider: {provider_id}[/red]')
+            return
+
+    cfg.active_provider = provider_id
+    pconfig = cfg.get_provider_config(provider_id)
+    api_key = cfg.get_api_key(provider_id)
+    model = cfg.get_provider_model(provider_id)
+
+    provider = create_provider(provider_id, pconfig, api_key)
+    agent.set_provider(provider)
+    agent.set_model(model)
+
+    console.print(f'  [green]Switched to {provider.name}[/green]')
+    if not api_key:
+        console.print(f'  [yellow]No API key. Use /key to set one.[/yellow]')
+        console.print(f'  [dim]Get key: {pconfig.get("get_key_url", "")}[/dim]')
+    console.print(f'  [dim]Model: {model}[/dim]')
+    console.print()
+
+
+def switch_model(agent: Agent):
+    """Interactive model switch — arrow-key selection menu."""
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    popular = pconfig.get('popular_models', [])
+    current = cfg.get_provider_model(pid)
+
+    if not popular:
+        console.print(f'  [yellow]No models configured for {pconfig.get("name", pid)}.[/yellow]')
+        console.print()
+        return
+
+    items = []
+    active_idx = 0
+    for i, m in enumerate(popular):
+        active = '  << active' if m == current else ''
+        items.append(f'{m}{active}')
+        if m == current:
+            active_idx = i
+
+    # Add "Fetch Live Models" option at the end
+    items.append('>>> Fetch Live Models from API <<<')
+
+    idx = interactive_select(items, title=f'-- Select Model ({pconfig.get("name", pid)}) --',
+                             active_index=active_idx)
+
+    if idx < 0:
+        console.print('  [dim]Cancelled.[/dim]')
+        console.print()
+    elif idx == len(popular):
+        # User selected "Fetch Live Models"
+        _do_live_model_select(agent)
+    else:
+        _do_switch_model(agent, popular[idx])
+
+
+def _do_switch_model(agent: Agent, model_input: str):
+    """Actually switch the model."""
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    popular = pconfig.get('popular_models', [])
+
+    # Try number first
+    try:
+        idx = int(model_input) - 1
+        if 0 <= idx < len(popular):
+            model_input = popular[idx]
+        else:
+            console.print(f'  [red]Invalid model number.[/red]')
+            return
+    except ValueError:
+        pass
+
+    cfg.set_provider_model(model_input, pid)
+    agent.set_model(model_input)
+    console.print(f'  [green]Model set to: {model_input}[/green]')
+    console.print()
+
+
+def set_api_key(agent: Agent):
+    """Set API key for current provider."""
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    provider_name = pconfig.get('name', pid)
+
+    console.print(f'  [cyan]Setting API key for {provider_name}...[/cyan]')
+    console.print(f'  [dim]Get key: {pconfig.get("get_key_url", "")}[/dim]')
+    console.print()
+
+    try:
+        key = console.input('  [bold]Enter API key:[/bold] ').strip()
+    except (KeyboardInterrupt, EOFError):
+        console.print('\n  [dim]Cancelled.[/dim]')
+        return
+
+    if not key:
+        console.print('  [dim]No key entered.[/dim]')
+        return
+
+    cfg.set_api_key(key, pid)
+
+    # Recreate provider with new key
+    new_api_key = cfg.get_api_key(pid)
+    new_pconfig = cfg.get_provider_config(pid)
+    new_provider = create_provider(pid, new_pconfig, new_api_key)
+    agent.set_provider(new_provider)
+
+    # Validate
+    console.print()
+    with with_spinner(f'Validating key for {provider_name}'):
+        ok, msg = new_provider.validate_key()
+
+    if ok:
+        console.print(f'  [green]{msg}[/green]')
+    else:
+        console.print(f'  [yellow]Warning: {msg}[/yellow]')
+    console.print()
+
+
+def list_models(agent: Agent):
+    """List available models for current provider."""
+    console.print()
+    with with_spinner('Fetching models'):
+        models = agent.provider.fetch_models()
+
+    if not models:
+        console.print(f'  [yellow]No models found or unable to fetch.[/yellow]')
+        pid = cfg.active_provider
+        pconfig = cfg.get_provider_config(pid)
+        popular = pconfig.get('popular_models', [])
+        if popular:
+            console.print(f'  [dim]Popular models for {pconfig.get("name", pid)}:[/dim]')
+            for m in popular:
+                console.print(f'    - {m}')
+        console.print()
+        return
+
+    console.print(f'  [bold cyan]Available models ({len(models)}):[/bold cyan]')
+    console.print()
+    for m in models:
+        mid = m.get('id', '')
+        free = '[FREE] ' if m.get('free') else ''
+        ctx = f' [dim](ctx: {m.get("context", "?")})[/dim]' if m.get('context') else ''
+        console.print(f'    {free}[green]{mid}[/green]{ctx}')
+    console.print()
+
+
+def show_info(agent: Agent, memory: Memory):
+    """Show current configuration info."""
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    api_key = cfg.get_api_key(pid)
+    model = cfg.get_provider_model(pid)
+
+    table = Table(box=box.ROUNDED, show_header=False,
+                  border_style='cyan', title_style='bold cyan',
+                  title='Current Configuration')
+    table.add_column('Key', style='bold cyan', min_width=18)
+    table.add_column('Value', style='white')
+
+    table.add_row('Version', VERSION_BANNER)
+    table.add_row('Provider', f'{agent.provider.name} ({pid})')
+    table.add_row('Model', model)
+    table.add_row('API Key', mask_key(api_key))
+    table.add_row('Thinking', 'visible' if agent.thinking_visible else 'hidden')
+    table.add_row('Max Rounds', str(MAX_TOOL_ROUNDS))
+    table.add_row('Messages', str(memory.count()))
+    table.add_row('Tools', str(len(agent.tools.get_tool_list())))
+
+    console.print(table)
+    console.print()
+
+
+def toggle_thinking(agent: Agent):
+    """Toggle thinking/reasoning visibility."""
+    current = agent.thinking_visible
+    agent.set_thinking(not current)
+    state = 'visible' if not current else 'hidden'
+    console.print(f'  [green]Thinking: {state}[/green]')
+    console.print()
+
+
+def compact_memory(memory: Memory):
+    """Compact conversation to system + last 10 messages."""
+    messages = memory.get_messages()
+    system = [m for m in messages if m['role'] == 'system']
+    non_system = [m for m in messages if m['role'] != 'system']
+    keep = non_system[-10:] if len(non_system) > 10 else non_system
+    memory.messages = system + keep
+
+
+def do_live_search(query: str):
+    """Execute a live web search and display results directly."""
+    console.print()
+    with with_spinner(f'Searching: {query}'):
+        from .toolkit import ToolRegistry
+        temp_tools = ToolRegistry()
+        result = temp_tools._live_search(query, 8, 'all')
+    console.print()
+    # Display results with nice formatting
+    for line in result.split('\n'):
+        if line.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
+            console.print(f'  [bold cyan]{line[:3]}[/bold cyan]{line[3:]}')
+        elif line.startswith('   http') or line.startswith('   [Source'):
+            console.print(f'  [dim]{line.strip()}[/dim]')
+        elif line.startswith('   '):
+            console.print(f'  [white]{line.strip()}[/white]')
+        elif line.startswith('Live Search') or line.startswith('='):
+            console.print(f'  [bold yellow]{line.strip()}[/bold yellow]')
+        elif line.startswith('  ['):
+            console.print(f'  [dim red]{line.strip()}[/dim red]')
+        else:
+            console.print(f'  {line.strip()}')
+    console.print()
+
+
+def do_live_models(agent: Agent):
+    """Fetch and display all available models from the current provider's API."""
+    console.print()
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    api_key = cfg.get_api_key(pid)
+
+    if not api_key:
+        console.print('  [yellow]No API key set. Use /key to set one.[/yellow]')
+        console.print()
+        return
+
+    with with_spinner(f'Fetching models from {pconfig.get("name", pid)}...'):
+        models = agent.provider.fetch_models()
+
+    if not models:
+        console.print('  [yellow]No models found or unable to fetch from API.[/yellow]')
+        popular = pconfig.get('popular_models', [])
+        if popular:
+            console.print(f'  [dim]Configured models for {pconfig.get("name", pid)}:[/dim]')
+            for m in popular:
+                console.print(f'    - {m}')
+        console.print()
+        return
+
+    # Group: free first
+    free_models = [m for m in models if m.get('free')]
+    paid_models = [m for m in models if not m.get('free')]
+    free_models.sort(key=lambda x: x.get('id', '').lower())
+    paid_models.sort(key=lambda x: x.get('id', '').lower())
+
+    console.print(f'  [bold cyan]Live Models from {pconfig.get("name", pid)} ({len(models)} total)[/bold cyan]')
+    console.print()
+
+    if free_models:
+        console.print(f'  [bold green]Free Models ({len(free_models)}):[/bold green]')
+        for m in free_models[:30]:
+            mid = m.get('id', '')
+            ctx = m.get('context', 0)
+            ctx_str = f' [dim](ctx: {ctx})[/dim]' if ctx else ''
+            console.print(f'    [green]{mid}[/green]{ctx_str}')
+        if len(free_models) > 30:
+            console.print(f'    [dim]... and {len(free_models) - 30} more free models[/dim]')
+        console.print()
+
+    if paid_models:
+        console.print(f'  [bold yellow]Paid Models ({len(paid_models)}):[/bold yellow]')
+        for m in paid_models[:20]:
+            mid = m.get('id', '')
+            ctx = m.get('context', 0)
+            ctx_str = f' [dim](ctx: {ctx})[/dim]' if ctx else ''
+            console.print(f'    {mid}{ctx_str}')
+        if len(paid_models) > 20:
+            console.print(f'    [dim]... and {len(paid_models) - 20} more paid models[/dim]')
+        console.print()
+
+
+def do_search_model(agent: Agent, query: str):
+    """Search models from API with a query filter."""
+    console.print()
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    api_key = cfg.get_api_key(pid)
+
+    if not api_key:
+        console.print('  [yellow]No API key set. Use /key to set one.[/yellow]')
+        console.print()
+        return
+
+    with with_spinner(f'Searching models matching "{query}"...'):
+        models = agent.provider.fetch_models()
+
+    if not models:
+        console.print(f'  [yellow]Unable to fetch models. Showing config matches:[/yellow]')
+        popular = pconfig.get('popular_models', [])
+        filtered = [m for m in popular if query.lower() in m.lower()]
+        if filtered:
+            for m in filtered:
+                console.print(f'    - {m}')
+        else:
+            console.print(f'    No models matching "{query}" in config.')
+        console.print()
+        return
+
+    q = query.lower()
+    filtered = [m for m in models if q in m.get('id', '').lower() or q in m.get('name', '').lower()]
+    filtered.sort(key=lambda x: (not x.get('free', False), x.get('id', '').lower()))
+
+    if not filtered:
+        console.print(f'  [yellow]No models matching "{query}" in {len(models)} available models.[/yellow]')
+        console.print()
+        return
+
+    console.print(f'  [bold cyan]Models matching "{query}" ({len(filtered)} found):[/bold cyan]')
+    console.print()
+
+    items = []
+    for m in filtered[:30]:
+        mid = m.get('id', '')
+        free = '[FREE] ' if m.get('free') else ''
+        items.append(f'{free}{mid}')
+
+    current = cfg.get_provider_model(pid)
+    active_idx = 0
+    for i, item in enumerate(items):
+        if current in item:
+            active_idx = i
+            break
+
+    idx = interactive_select(items, title=f'-- Select Model ({query}) --', active_index=active_idx)
+    if idx >= 0:
+        # Extract model ID (remove [FREE] prefix)
+        selected = items[idx]
+        model_id = selected.replace('[FREE] ', '').strip()
+        _do_switch_model(agent, model_id)
+    else:
+        console.print('  [dim]Cancelled.[/dim]')
+        console.print()
+
+
+def _do_live_model_select(agent: Agent):
+    """Fetch live models and let user select one interactively."""
+    pid = cfg.active_provider
+    pconfig = cfg.get_provider_config(pid)
+    api_key = cfg.get_api_key(pid)
+
+    if not api_key:
+        console.print('  [yellow]No API key. Cannot fetch live models.[/yellow]')
+        console.print()
+        return
+
+    console.print()
+    provider_name = pconfig.get('name', pid)
+    with with_spinner(f'Fetching live models from {provider_name}...'):
+        try:
+            models = agent.provider.fetch_models()
+        except Exception as e:
+            console.print()
+            console.print(f'  [red]Error fetching models: {e}[/red]')
+            console.print()
+            return
+
+    if not models:
+        console.print(f'  [yellow]No models returned from {provider_name} API.[/yellow]')
+        console.print('  [dim]Possible reasons: invalid API key, network issue, or API not responding.[/dim]')
+        console.print(f'  [dim]Try: /key to update your API key for {provider_name}[/dim]')
+        console.print()
+        return
+
+    models.sort(key=lambda x: (not x.get('free', False), x.get('id', '').lower()))
+    current = cfg.get_provider_model(pid)
+
+    items = []
+    active_idx = 0
+    for i, m in enumerate(models[:50]):
+        mid = m.get('id', '')
+        free = '[FREE] ' if m.get('free') else ''
+        active = '  << active' if mid == current else ''
+        items.append(f'{free}{mid}{active}')
+        if mid == current:
+            active_idx = i
+
+    idx = interactive_select(items, title=f'-- Live Models ({provider_name}, {len(models)} total) --',
+                             active_index=active_idx)
+    if idx >= 0:
+        selected = items[idx]
+        model_id = selected.replace('[FREE] ', '').replace('  << active', '').strip()
+        _do_switch_model(agent, model_id)
+    else:
+        console.print('  [dim]Cancelled.[/dim]')
+        console.print()
+
+
+# ══════════════════════════════════════
+# ENTRY POINT
+# ══════════════════════════════════════
 
 if __name__ == '__main__':
     main()

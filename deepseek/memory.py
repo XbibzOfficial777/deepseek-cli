@@ -1,83 +1,100 @@
-# DeepSeek CLI v3 — Conversation Memory
-
-from datetime import datetime
-from typing import Optional
-
+# DeepSeek CLI v5.5 — Conversation Memory
+# Stores message history with tool call support
 
 class Memory:
-    """Manages conversation history with token-aware trimming."""
+    """Manages conversation message history."""
 
-    def __init__(self, system_prompt: str = None):
-        self.messages = []
-        self.system_prompt = system_prompt or (
-            "You are a helpful AI assistant with access to tools. "
-            "Use tools when needed to help the user. "
-            "Always respond in the same language the user uses."
+    def __init__(self):
+        self.messages: list[dict] = []
+        self.system_prompt = (
+            "You are DeepSeek CLI Agent v5.5, a powerful AI assistant running in the terminal.\n"
+            "You have access to 65+ tools including file operations, LIVE web search, code execution,\n"
+            "system info, math, PDF reader/editor, DOCX creator/reader, image viewer,\n"
+            "video info, APK analyzer, live model search, and web browser automation.\n"
+            "Use tools freely — there are NO usage limits.\n"
+            "\n"
+            "IMPORTANT RULES:\n"
+            "1. When users ask about current events, news, weather, stock prices, or anything\n"
+            "   that requires real-time information, ALWAYS use the 'live_search' tool.\n"
+            "2. Be helpful, direct, and concise. Execute tools when needed to accomplish tasks.\n"
+            "3. STOP calling tools once you have enough information to answer the user's question.\n"
+            "   Do NOT keep calling the same tool repeatedly — this wastes resources and time.\n"
+            "4. Do NOT repeat tool calls you have already made. If a tool returned useful results,\n"
+            "   use those results directly instead of calling the tool again.\n"
+            "5. When your task is complete, provide your final answer WITHOUT calling any more tools.\n"
+            "6. If a tool fails, try a different approach instead of retrying the same tool endlessly.\n"
+            "7. You have a MAXIMUM of 12 tool rounds per response. Plan your tool usage wisely.\n"
+            "\n"
+            "RESPONSE GUIDELINES:\n"
+            "- Answer directly when you know the answer — no need to always use tools.\n"
+            "- If you cannot complete a task after trying, explain what went wrong.\n"
+            "- Format responses clearly with markdown when appropriate.\n"
+            "- Keep responses focused and avoid unnecessary verbosity."
         )
-        self.created_at = datetime.now()
+        # Add initial system message
+        self.messages.append({'role': 'system', 'content': self.system_prompt})
 
-    def add_system(self, text: str = None):
-        """Add or replace system message."""
-        content = text or self.system_prompt
-        if self.messages and self.messages[0].get('role') == 'system':
-            self.messages[0]['content'] = content
-        else:
-            self.messages.insert(0, {'role': 'system', 'content': content})
+    def add_user(self, content: str):
+        self.messages.append({'role': 'user', 'content': content})
 
-    def add_user(self, text: str):
-        self.messages.append({'role': 'user', 'content': text})
+    def add_assistant(self, content: str):
+        self.messages.append({'role': 'assistant', 'content': content})
 
-    def add_assistant(self, text: str):
-        self.messages.append({'role': 'assistant', 'content': text})
+    def add_assistant_tool_calls(self, content: str, tool_calls: list):
+        msg = {'role': 'assistant', 'content': content, 'tool_calls': tool_calls}
+        self.messages.append(msg)
 
     def add_tool_result(self, tool_call_id: str, name: str, result: str):
         self.messages.append({
             'role': 'tool',
             'tool_call_id': tool_call_id,
             'name': name,
-            'content': str(result)
+            'content': result
         })
 
-    def add_assistant_tool_calls(self, content: str, tool_calls: list):
-        """Add assistant message with tool_calls."""
-        self.messages.append({
-            'role': 'assistant',
-            'content': content or '',
-            'tool_calls': tool_calls
-        })
+    def add_system(self, content: str):
+        self.system_prompt = content
+        # Update the first system message
+        if self.messages and self.messages[0]['role'] == 'system':
+            self.messages[0]['content'] = content
+        else:
+            self.messages.insert(0, {'role': 'system', 'content': content})
 
-    def get_messages(self) -> list:
+    def get_messages(self) -> list[dict]:
         return list(self.messages)
 
     def clear(self):
-        self.messages.clear()
-        self.add_system()
+        self.messages = [{'role': 'system', 'content': self.system_prompt}]
 
     def count(self) -> int:
-        return len(self.messages)
-
-    def get_last_exchange(self, n: int = 4) -> list:
-        """Get last n messages for context display."""
-        return self.messages[-n:] if self.messages else []
+        return len(self.messages) - 1  # Exclude system message
 
     def export_text(self) -> str:
         """Export conversation as readable text."""
-        lines = [
-            f"Conversation exported: {datetime.now().isoformat()}",
-            "=" * 50
-        ]
+        lines = []
+        lines.append("DeepSeek CLI v5.5 — Chat Export")
+        lines.append(f"Messages: {self.count()}")
+        lines.append("=" * 50)
         for msg in self.messages:
-            role = msg.get('role', 'unknown').upper()
+            role = msg['role'].upper()
             content = msg.get('content', '')
+            if role == 'SYSTEM':
+                continue
             if role == 'TOOL':
-                name = msg.get('name', 'tool')
-                lines.append(f"[{role}: {name}] {content}")
-            elif role == 'ASSISTANT' and msg.get('tool_calls'):
-                lines.append(f"[{role}] {content}")
-                for tc in msg['tool_calls']:
-                    fn = tc.get('function', {})
-                    lines.append(f"  → Tool: {fn.get('name', '?')}({fn.get('arguments', '')})")
-            else:
-                lines.append(f"[{role}] {content}")
-            lines.append("-" * 30)
-        return "\n".join(lines)
+                name = msg.get('name', '?')
+                lines.append(f"\n[Tool Result: {name}]")
+                lines.append(content)
+            elif role == 'ASSISTANT':
+                tool_calls = msg.get('tool_calls', [])
+                if tool_calls:
+                    for tc in tool_calls:
+                        fn = tc.get('function', {})
+                        lines.append(f"\n[Tool Call: {fn.get('name', '?')}]")
+                        lines.append(fn.get('arguments', '{}'))
+                if content:
+                    lines.append(f"\n[Assistant]")
+                    lines.append(content)
+            elif role == 'USER':
+                lines.append(f"\n[User]")
+                lines.append(content)
+        return '\n'.join(lines)
