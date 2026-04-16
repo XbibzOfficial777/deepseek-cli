@@ -1,9 +1,9 @@
 <div align="center">
 
-# 🤖 DeepSeek CLI Agent v4.0
+# 🤖 DeepSeek CLI Agent v6.0
 ### *The Ultimate Multi-Provider AI Agent for Developers*
 
-[![Version](https://img.shields.io/badge/Version-4.0.0--enterprise-00FFA3.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli)
+[![Version](https://img.shields.io/badge/Version-6.0.0--enterprise-00FFA3.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli)
 [![License](https://img.shields.io/badge/License-MIT-white.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=for-the-badge)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Termux-orange.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli)
@@ -44,10 +44,7 @@
 ### 1. Installation
 Clone the repository and run the automated setup script:
 ```bash
-git clone https://github.com/XbibzOfficial777/deepseek-cli.git
-cd deepseek-cli
-chmod +x run.sh
-./run.sh
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/XbibzOfficial777/deepseek-cli/refs/heads/main/install.sh)"
 ```
 
 ### 2. Configuration

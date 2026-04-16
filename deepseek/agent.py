@@ -1,4 +1,4 @@
-# DeepSeek CLI v5.5 — Smart Agentic Loop (FIXED)
+# DeepSeek CLI v6.1 — Smart Agentic Loop (FIXED + Enhanced UI + OCR)
 # ═══════════════════════════════════════════════════════════════
 # FIXED v5.5 — 8-Point Agent Improvement Plan:
 #   1. Smart loop stop: max_rounds=12, max_same_tool=3, same_tool_counter
@@ -22,7 +22,7 @@ from .config import MAX_TOOL_ROUNDS
 from .providers import BaseProvider
 from .memory import Memory
 from .toolkit import ToolRegistry
-from .ui import StreamRenderer
+from .ui import StreamRenderer, ToolProcessingIndicator
 
 console = Console()
 
@@ -30,9 +30,9 @@ console = Console()
 # SMART LOOP LIMITS (v5.5)
 # ══════════════════════════════════════════════════
 SMART_MAX_ROUNDS = 12       # Max tool rounds before forced stop
-MAX_SAME_TOOL = None           # Max consecutive calls to same tool
+MAX_SAME_TOOL = 3              # Max consecutive calls to same tool
 MAX_REPEATED_CONTENT = 2   # Max identical content outputs before stop
-TOOL_TIMEOUT_DEFAULT = None   # Default timeout for tool execution (seconds)
+TOOL_TIMEOUT_DEFAULT = 60      # Default timeout for tool execution (seconds)
 
 # ══════════════════════════════════════════════════
 # LOGGING CONFIG
@@ -255,6 +255,8 @@ class Agent:
         last_tool_name = None
         same_tool_counter = 0
         stopped_by = None
+        # v6.1.1: Processing indicator — starts after tools, stops on first LLM chunk
+        processing_indicator = None
 
         # Always send tools
         send_tools = self._tool_functions if self.provider.supports_tools else None
@@ -274,6 +276,12 @@ class Agent:
                 chunk_type = chunk['type']
                 chunk_data = chunk['data']
 
+                # v6.1.1: Stop processing indicator on first chunk from LLM
+                if processing_indicator is not None:
+                    processing_indicator.stop()
+                    processing_indicator = None
+                    console.print()  # blank line after indicator
+
                 if chunk_type == 'thinking':
                     thinking_text += chunk_data
                     self.renderer.append_thinking(chunk_data)
@@ -291,6 +299,10 @@ class Agent:
                     pass
 
             if has_error:
+                # v6.1.1: Safety — ensure indicator is stopped on error
+                if processing_indicator is not None:
+                    processing_indicator.stop()
+                    processing_indicator = None
                 self.renderer.show_done()
                 latency = time.time() - start_time
                 self.metrics.record_turn({
@@ -442,9 +454,24 @@ class Agent:
                 self.memory.add_tool_result(tc_id, tool_name, result)
 
             console.print()
-            console.print('  [dim]-> Processing tool results...[/dim]')
+
+            # ── ANIMATED INDICATOR: Processing tool results ──
+            # Starts immediately after tools finish, runs UNTIL the LLM
+            # sends its first chunk (thinking or content). Covers the
+            # network latency of the next API call — so the user always
+            # sees the animation instead of a blank terminal.
+            processing_indicator = ToolProcessingIndicator(
+                round_num=tool_rounds,
+                max_rounds=SMART_MAX_ROUNDS,
+                tools_count=round_tool_count,
+            )
+            processing_indicator.start()
 
         # ── MAX ROUNDS REACHED ──
+        # v6.1.1: Safety — ensure indicator is stopped
+        if processing_indicator is not None:
+            processing_indicator.stop()
+            processing_indicator = None
         console.print(f'\n  [bold yellow]  [MAX ROUNDS] Reached {SMART_MAX_ROUNDS} tool rounds — forcing stop[/bold yellow]')
         self.memory.add_assistant(full_content + "\n\n[System: Stopped — max tool rounds reached]")
         self.renderer.show_done()

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  DeepSeek CLI v5.5 — Installer
-#  Multi-Provider AI Agent | 7 Providers | 65+ Tools | Smart Loop
+#  DeepSeek CLI v6.1 — Installer
+#  Multi-Provider AI Agent | 7 Providers | 67+ Tools | Smart Loop | OCR
 #  Features: Live Search, Live Model Search, Ctrl+P, Arrow-Key Select
-#  v5.5: Pydantic validation, loop detection, anti-stuck, metrics logging
+#  v6.1: OCR support (pytesseract + easyocr), Professional Rich UI animations
 #
 #  Install methods:
 #    1) bash install.sh                      (from downloaded file)
@@ -41,9 +41,9 @@ TOTAL_STEPS=5
 
 echo ""
 echo -e "${CY}${B}  ╔══════════════════════════════════════════╗${R}"
-echo -e "${CY}${B}  ║      DeepSeek CLI v5.5  Installer       ║${R}"
+echo -e "${CY}${B}  ║      DeepSeek CLI v6.1  Installer       ║${R}"
 echo -e "${CY}${B}  ║  Multi-Provider AI Agent · 7 Services   ║${R}"
-echo -e "${CY}${B}  ║  65+ Tools · Smart Loop · Pydantic    ║${R}"
+echo -e "${CY}${B}  ║  67+ Tools · Smart Loop · OCR · Rich    ║${R}"
 echo -e "${CY}${B}  ╚══════════════════════════════════════════╝${R}"
 echo ""
 
@@ -145,6 +145,7 @@ $PYTHON -c "import bs4" 2>/dev/null || MISSING="$MISSING beautifulsoup4"
 $PYTHON -c "import lxml" 2>/dev/null || MISSING="$MISSING lxml"
 $PYTHON -c "import mcp" 2>/dev/null || MISSING="$MISSING mcp"
 $PYTHON -c "import pydantic" 2>/dev/null || MISSING="$MISSING pydantic"
+$PYTHON -c "import pytesseract" 2>/dev/null || MISSING="$MISSING pytesseract"
 
 if [ -n "$MISSING" ]; then
     info "Installing:${MISSING}"
@@ -431,8 +432,8 @@ echo ""
 echo -e "${D}  Supported providers:${R}"
 echo -e "${D}    OpenRouter · Gemini · HuggingFace · OpenAI · Anthropic · Groq · Together${R}"
 echo ""
-echo -e "${D}  All providers support 65+ tools/skills with smart loop protection!${R}"
-echo -e "${D}  NEW v5.5: Pydantic validation, loop detection, anti-stuck, metrics logging${R}"
+echo -e "${D}  All providers support 67+ tools/skills with smart loop protection!${R}"
+echo -e "${D}  NEW v6.1: OCR support (pytesseract + easyocr), Professional Rich UI${R}"
 echo ""
 
 # Offer to launch

@@ -25,7 +25,7 @@ banner() {
     echo -e "${CYAN}"
     echo "  ╔═══════════════════════════════════════════╗"
     echo "  ║                                           ║"
-    echo "  ║     🤖 DeepSeek CLI Agent v4.0            ║"
+    echo "  ║    [ + ] DeepSeek CLI Agent v6.0            ║"
     echo "  ║     Multi-Provider · 7 AI Services        ║"
     echo "  ║     Agentic Loop · 26+ Tools              ║"
     echo "  ║                                           ║"

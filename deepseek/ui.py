@@ -30,6 +30,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 from rich import box
+from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn, TimeElapsedColumn
 
 console = Console()
 
@@ -376,6 +377,120 @@ class StreamRenderer:
         if len(lines) > 15:
             display = '\n'.join(lines[:15]) + f'\n  ... ({len(lines) - 15} more lines)'
         console.print(f'  [dim green]result[/dim green] {display}')
+
+
+# ══════════════════════════════════════
+# TOOL PROCESSING INDICATOR (v6.1.1)
+# ══════════════════════════════════════
+# Thread-based animation using os.write() — 100% Termux compatible.
+# NO Rich Status dependency (avoids API breakage across Rich versions).
+# Shows animated spinner + cycling dots while LLM processes tool results.
+
+# ANSI color codes (no Rich dependency for the animation itself)
+_CYN = '\033[1;36m'     # bold cyan
+_DIM = '\033[2m'         # dim
+_RST = '\033[0m'        # reset
+
+# Spinner frames: rotation characters
+_SPIN_FRAMES = ['\\', '|', '/', '-']
+
+# Dot wave frames: animated ellipsis
+_DOT_FRAMES = ['   ', '.  ', '.. ', '...', ' ..', '  .']
+
+
+class ToolProcessingIndicator:
+    """
+    Animated 'Processing tool results...' indicator.
+
+    Uses a background thread + os.write() for maximum terminal compatibility
+    (works on Termux, Linux, macOS — no Rich Status needed).
+
+    The animation shows:
+      \\ Processing tool results ...  [round 1/12]
+      | Processing tool results ..   [round 1/12]
+      / Processing tool results .    [round 1/12]
+      - Processing tool results     [round 1/12]
+
+    Usage:
+        indicator = ToolProcessingIndicator(round_num=1, max_rounds=12, tools_count=2)
+        indicator.start()
+        ... (LLM call happens here) ...
+        indicator.stop()
+    """
+
+    def __init__(self, round_num: int = 1, max_rounds: int = 12, tools_count: int = 0):
+        self.round_num = round_num
+        self.max_rounds = max_rounds
+        self.tools_count = tools_count
+        self._running = False
+        self._thread = None
+        self._out_fd = -1
+
+    def _get_fd(self):
+        """Get stdout file descriptor (cached)."""
+        if self._out_fd < 0:
+            try:
+                self._out_fd = sys.stdout.fileno()
+            except Exception:
+                self._out_fd = -1
+        return self._out_fd
+
+    def _anim_loop(self):
+        """Background thread: spinner rotation + dot wave animation."""
+        idx = 0
+        fd = self._get_fd()
+        if fd < 0:
+            return
+
+        # Build the static part of the message
+        tool_info = ''
+        if self.tools_count > 0:
+            tool_info = f' ({self.tools_count} tool{"s" if self.tools_count > 1 else ""})'
+
+        while self._running:
+            spin = _SPIN_FRAMES[idx % len(_SPIN_FRAMES)]
+            dots = _DOT_FRAMES[idx % len(_DOT_FRAMES)]
+            # Compose: " \ Processing tool results (2 tools) ... [round 1/12]"
+            line = (f'\r {_CYN}{spin}{_RST} Processing tool results'
+                    f'{_DIM}{tool_info}{dots}{_RST}'
+                    f'{_DIM}  [round {self.round_num}/{self.max_rounds}]{_RST}')
+            try:
+                os.write(fd, line.encode('utf-8'))
+            except Exception:
+                pass
+            idx += 1
+            time.sleep(0.1)  # 100ms per frame — smooth but not too fast
+
+    def start(self):
+        """Start the animated indicator."""
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._anim_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Stop the animated indicator and clear the line."""
+        was_running = self._running
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=0.5)
+            self._thread = None
+        # Clear the indicator line from terminal
+        if was_running:
+            fd = self._get_fd()
+            if fd >= 0:
+                try:
+                    os.write(fd, b'\r\033[K')  # carriage return + clear line
+                except Exception:
+                    pass
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
 
 
 # ══════════════════════════════════════
@@ -810,14 +925,16 @@ def prompt_input() -> str:
 # ══════════════════════════════════════
 
 BANNER = r"""[bold cyan]
-   ____                 __  __            _       _
-  / __ \____ ___  ____/ /_/ /_  ___    (_)_ __ (_)
- / / / / __ `__ \/ __  / __ \/ __ \  | | '_ \| |
-/ /_/ / / / / / / /_/ / / / / /_/ /  | | | | | |
-\____/_/ /_/ /_/\__,_/_/ /_/\____/  |_|_| |_|_|[/bold cyan]
+________                                            __    
+\______ \   ____   ____ ______  ______ ____   ____ |  | __
+ |    |  \_/ __ \_/ __ \\____ \/  ___// __ \_/ __ \|  |/ /
+ |    `   \  ___/\  ___/|  |_> >___ \\  ___/\  ___/|    < 
+/_______  /\___  >\___  >   __/____  >\___  >\___  >__|_ \
+        \/     \/     \/|__|       \/     \/     \/     \/ v6.1[/bold cyan]
 
-[dim]    DeepSeek CLI Agent v5.5[/dim]
-[dim]    Multi-Provider | 7 AI Services | 65+ Tools | Live Stream | Web Browser | Smart Loop[/dim]
+[dim]    DeepSeek CLI Agent UnOfficial v6.1[/dim]
+[dim]    Author : @xbibzofficial[/dim]
+[dim]    GitHub : github.com/@XbibzOfficial777
 """
 
 
@@ -874,10 +991,10 @@ def show_version():
     version_table = Table(box=box.SIMPLE, show_header=False, border_style='cyan')
     version_table.add_column('Key', style='bold cyan', min_width=20)
     version_table.add_column('Value', style='white')
-    version_table.add_row('Version', 'DeepSeek CLI Agent v5.5')
-    version_table.add_row('Features', 'Multi-Provider | 7 AI Services | 65+ Tools | Real-Time Stream | Web Browser | Smart Loop')
+    version_table.add_row('Version', 'DeepSeek CLI Agent v6.1')
+    version_table.add_row('Features', 'Multi-Provider | 7 AI Services | 67+ Tools | Real-Time Stream | Web Browser | Smart Loop | OCR')
     version_table.add_row('Providers', 'OpenRouter, Gemini, HuggingFace, OpenAI, Anthropic, Groq, Together')
     version_table.add_row('Max Tool Rounds', '12 (smart loop)')
-    version_table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, Video, APK, Search')
+    version_table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, OCR, Video, APK, Search')
     console.print(version_table)
     console.print()

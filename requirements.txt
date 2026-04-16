@@ -10,3 +10,5 @@ beautifulsoup4
 lxml
 mcp
 pydantic
+pytesseract
+easyocr

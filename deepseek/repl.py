@@ -18,9 +18,9 @@ from .ui import (console, show_banner, show_welcome, show_help,
                  show_version, with_spinner, interactive_select,
                  prompt_input, CTRL_P_SENTINEL)
 
-VERSION = '5.5'
-VERSION_BANNER = 'DeepSeek CLI Agent v5.5'
-VERSION_FEATURES = 'Multi-Provider | 7 AI Services | 65+ Tools | Real-Time Stream | Web Browser | Smart Loop'
+VERSION = '6.1'
+VERSION_BANNER = 'DeepSeek CLI Agent v6.1'
+VERSION_FEATURES = 'Multi-Provider | 7 AI Services | 67+ Tools | Real-Time Stream | Web Browser | Smart Loop | OCR'
 
 
 def main():
@@ -377,7 +377,7 @@ def show_version_info():
     table.add_row('Loop Detection', f'max_same_tool={3}, anti_stuck=ON')
     table.add_row('Validation', 'Pydantic (with fallback)')
     table.add_row('Logging', '~/.deepseek-cli/logs/')
-    table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, Video, APK, Live Search, Browser')
+    table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, Video, APK, OCR, Live Search, Browser')
     console.print(table)
     console.print()
 
@@ -402,6 +402,7 @@ def show_tools(tools: ToolRegistry):
         'Image': ['image_view', 'image_info'],
         'Video': ['video_info', 'video_play'],
         'APK': ['apk_analyze'],
+        'OCR': ['ocr_read', 'ocr_url'],
         'Search': ['live_search', 'search_models'],
     }
 

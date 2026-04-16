@@ -1,10 +1,12 @@
-# DeepSeek CLI v5.5 — Tool Registry (65+ Tools)
-# File, Web, Code, System, Math, Utility + PDF, DOCX, Image, Video, APK
+# DeepSeek CLI v6.1 — Tool Registry (65+ Tools)
+# File, Web, Code, System, Math, Utility + PDF, DOCX, Image, Video, APK, OCR
 # + Live Search, Live Model Search, MCP Real-Time Data (16 tools)
 # + Web Browser Control (10 tools): Navigate, Login, Click, Fill, Snapshot, etc.
+# + OCR Tools (v6.1): ocr_read, ocr_url — Tesseract + EasyOCR fallback
 # NO USAGE LIMITS — all tools available at all times
 #
 # v5.5 ADDED: Pydantic validation layer for tool inputs
+# v6.1 ADDED: OCR support (pytesseract + easyocr fallback)
 
 import os
 import sys
@@ -189,6 +191,7 @@ class ToolRegistry:
         self._register_pdf_tools()
         self._register_docx_tools()
         self._register_image_tools()
+        self._register_ocr_tools()
         self._register_video_tools()
         self._register_apk_tools()
         self._register_search_tools()
@@ -772,6 +775,68 @@ class ToolRegistry:
                 'required': ['path']
             },
             lambda args: self._image_info(args['path'])
+        )
+
+    # ══════════════════════════════════════
+    # OCR TOOLS (v6.1)
+    # pytesseract (primary) + easyocr (fallback)
+    # ══════════════════════════════════════
+
+    def _register_ocr_tools(self):
+        self.register(
+            'ocr_read',
+            'Read and extract text from an image file using OCR (Optical Character Recognition). '
+            'Supports JPG, PNG, BMP, TIFF, WebP, GIF. Returns the extracted text. '
+            'Requires pytesseract or easyocr to be installed. Use for screenshots, scanned documents, '
+            'signs, receipts, handwritten text, or any image containing readable text.',
+            {
+                'type': 'object',
+                'properties': {
+                    'path': {'type': 'string', 'description': 'Path to the image file'},
+                    'language': {'type': 'string',
+                                'description': 'Language(s) for OCR. Tesseract: "eng", "eng+ind", "jpn", etc. '
+                                               'EasyOCR: "en", "id", "ja", etc. Default: "eng"'},
+                    'engine': {'type': 'string',
+                              'description': 'OCR engine: "tesseract" (fast, needs tesseract-ocr installed), '
+                                             '"easyocr" (slower but no system dependency), or "auto" (try tesseract first, fallback to easyocr). '
+                                             'Default: "auto"'},
+                    'preprocess': {'type': 'string',
+                                   'description': 'Image preprocessing: "none" (default), "grayscale", "threshold", '
+                                                  '"denoise", "sharpen", "enhance". Improves OCR accuracy on low-quality images.'},
+                },
+                'required': ['path']
+            },
+            lambda args: self._ocr_read(
+                args['path'],
+                args.get('language', 'eng'),
+                args.get('engine', 'auto'),
+                args.get('preprocess', 'none'),
+            )
+        )
+
+        self.register(
+            'ocr_url',
+            'Download an image from a URL and extract text using OCR. Supports the same options as ocr_read. '
+            'Useful for reading text from online images, screenshots shared as links, etc.',
+            {
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'URL of the image to OCR'},
+                    'language': {'type': 'string',
+                                'description': 'Language(s) for OCR. Default: "eng"'},
+                    'engine': {'type': 'string',
+                              'description': 'OCR engine: "tesseract", "easyocr", or "auto". Default: "auto"'},
+                    'preprocess': {'type': 'string',
+                                   'description': 'Image preprocessing: "none", "grayscale", "threshold", "denoise", "sharpen", "enhance"'},
+                },
+                'required': ['url']
+            },
+            lambda args: self._ocr_url(
+                args['url'],
+                args.get('language', 'eng'),
+                args.get('engine', 'auto'),
+                args.get('preprocess', 'none'),
+            )
         )
 
     # ══════════════════════════════════════
@@ -2120,6 +2185,249 @@ class ToolRegistry:
         except Exception as e:
             return f"Image info error: {e}"
 
+
+    # ═══════════════════════════════════════════════════════════════
+    # TOOL IMPLEMENTATIONS — OCR (v6.1)
+    # pytesseract (primary) + easyocr (fallback)
+    # ═══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _ocr_preprocess_image(img, mode: str):
+        """
+        Apply preprocessing to a PIL Image to improve OCR accuracy.
+        Modes: none, grayscale, threshold, denoise, sharpen, enhance.
+        Returns a processed PIL Image.
+        """
+        from PIL import Image, ImageFilter, ImageOps
+
+        if mode == 'none' or not mode:
+            return img
+
+        # Ensure RGB mode for processing
+        if img.mode == 'RGBA':
+            img = img.convert('RGB')
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        if mode == 'grayscale':
+            return img.convert('L')
+
+        elif mode == 'threshold':
+            gray = img.convert('L')
+            # Otsu-like simple threshold
+            threshold = 128
+            return gray.point(lambda x: 255 if x > threshold else 0, '1')
+
+        elif mode == 'denoise':
+            return img.filter(ImageFilter.MedianFilter(size=3))
+
+        elif mode == 'sharpen':
+            return img.filter(ImageFilter.SHARPEN)
+
+        elif mode == 'enhance':
+            from PIL import ImageEnhance
+            img = ImageEnhance.Contrast(img).enhance(1.5)
+            img = ImageEnhance.Sharpness(img).enhance(1.5)
+            img = ImageEnhance.Brightness(img).enhance(1.1)
+            return img
+
+        return img
+
+    def _ocr_with_tesseract(self, img, language: str) -> str:
+        """Run OCR using pytesseract. Returns extracted text."""
+        try:
+            import pytesseract
+        except ImportError:
+            return None  # Signal: pytesseract not available
+
+        try:
+            # pytesseract expects 'eng', 'eng+ind', etc.
+            text = pytesseract.image_to_string(img, lang=language)
+            return text.strip() if text.strip() else None
+        except pytesseract.TesseractNotFoundError:
+            return None  # Tesseract binary not found
+        except Exception:
+            return None  # Other tesseract error
+
+    def _ocr_with_easyocr(self, img, language: str) -> str:
+        """Run OCR using EasyOCR. Returns extracted text."""
+        try:
+            import easyocr
+        except ImportError:
+            return None  # Signal: easyocr not available
+
+        try:
+            # EasyOCR uses different language codes
+            # Map common tesseract codes to easyocr codes
+            lang_map = {
+                'eng': 'en', 'ind': 'id', 'jpn': 'ja', 'kor': 'ko',
+                'chi_sim': 'ch_sim', 'chi_tra': 'ch_tra', 'spa': 'es',
+                'fra': 'fr', 'deu': 'de', 'por': 'pt', 'rus': 'ru',
+                'ara': 'ar', 'hin': 'hi', 'tha': 'th', 'vie': 'vi',
+            }
+            # Handle compound languages like 'eng+ind'
+            langs = language.split('+')
+            easy_langs = []
+            for lang in langs:
+                easy_langs.append(lang_map.get(lang.strip(), lang.strip()))
+
+            reader = easyocr.Reader(easy_langs, gpu=False, verbose=False)
+
+            # Convert PIL Image to numpy array
+            import numpy as np
+            img_array = np.array(img)
+
+            results = reader.readtext(img_array)
+            if not results:
+                return None
+
+            # Concatenate all detected text
+            lines = []
+            for detection in results:
+                text = detection[1]
+                confidence = detection[2]
+                if confidence > 0.3:  # Filter low-confidence results
+                    lines.append(text)
+
+            full_text = '\n'.join(lines) if lines else None
+            return full_text
+        except Exception:
+            return None
+
+    def _ocr_read(self, path: str, language: str = 'eng',
+                  engine: str = 'auto', preprocess: str = 'none') -> str:
+        """
+        Extract text from an image file using OCR.
+        Supports pytesseract and easyocr engines with automatic fallback.
+        """
+        p = Path(path).expanduser()
+        if not p.exists():
+            return f"Error: File not found: {path}"
+
+        # Check if Pillow is available
+        try:
+            from PIL import Image
+        except ImportError:
+            return "Error: Pillow not installed. Run: pip install Pillow"
+
+        try:
+            img = Image.open(str(p))
+        except Exception as e:
+            return f"Error: Cannot open image: {e}"
+
+        # Apply preprocessing
+        img = self._ocr_preprocess_image(img, preprocess)
+
+        # Determine engine strategy
+        engine = engine.lower().strip() if engine else 'auto'
+
+        if engine == 'tesseract':
+            result = self._ocr_with_tesseract(img, language)
+            if result:
+                return f"OCR Result (Tesseract | lang: {language} | preprocess: {preprocess}):\n{'=' * 60}\n{result}"
+            return ("Error: Tesseract failed. Make sure pytesseract and tesseract-ocr are installed.\n"
+                    "  pip install pytesseract\n"
+                    "  Termux: pkg install tesseract\n"
+                    "  Linux:  sudo apt install tesseract-ocr\n"
+                    "  macOS:  brew install tesseract\n"
+                    "  Or try engine=\"easyocr\" (pip install easyocr)")
+
+        elif engine == 'easyocr':
+            result = self._ocr_with_easyocr(img, language)
+            if result:
+                return f"OCR Result (EasyOCR | lang: {language} | preprocess: {preprocess}):\n{'=' * 60}\n{result}"
+            return ("Error: EasyOCR failed. Make sure easyocr is installed.\n"
+                    "  pip install easyocr\n"
+                    "  Note: First run downloads language models (~100MB).\n"
+                    "  Or try engine=\"tesseract\" (pip install pytesseract)")
+
+        else:  # engine == 'auto'
+            # Try tesseract first, then easyocr
+            tesseract_result = self._ocr_with_tesseract(img, language)
+            if tesseract_result:
+                return f"OCR Result (Tesseract | lang: {language} | preprocess: {preprocess}):\n{'=' * 60}\n{tesseract_result}"
+
+            # Fallback to easyocr
+            easyocr_result = self._ocr_with_easyocr(img, language)
+            if easyocr_result:
+                return f"OCR Result (EasyOCR | lang: {language} | preprocess: {preprocess}):\n{'=' * 60}\n{easyocr_result}"
+
+            # Both failed
+            return ("Error: No OCR engine available. Install one of:\n\n"
+                    "  Option 1 - Tesseract (recommended, fast):\n"
+                    "    pip install pytesseract\n"
+                    "    Termux: pkg install tesseract\n"
+                    "    Linux:  sudo apt install tesseract-ocr\n"
+                    "    macOS:  brew install tesseract\n\n"
+                    "  Option 2 - EasyOCR (no system dependency, slower):\n"
+                    "    pip install easyocr\n"
+                    "    Note: Downloads ~100MB language models on first use.")
+
+    def _ocr_url(self, url: str, language: str = 'eng',
+                 engine: str = 'auto', preprocess: str = 'none') -> str:
+        """
+        Download an image from URL and extract text using OCR.
+        Downloads to a temporary file, then calls _ocr_read.
+        """
+        try:
+            import httpx
+        except ImportError:
+            return "Error: httpx not installed. Run: pip install httpx"
+
+        try:
+            with httpx.Client(timeout=30, follow_redirects=True) as client:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36'
+                }
+                response = client.get(url, headers=headers)
+                response.raise_for_status()
+
+            # Determine file extension from URL or content-type
+            content_type = response.headers.get('content-type', '')
+            ext = '.jpg'
+            if 'png' in content_type:
+                ext = '.png'
+            elif 'webp' in content_type:
+                ext = '.webp'
+            elif 'gif' in content_type:
+                ext = '.gif'
+            elif 'bmp' in content_type:
+                ext = '.bmp'
+            else:
+                # Try to guess from URL
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                path_lower = parsed.path.lower()
+                for e in ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff']:
+                    if path_lower.endswith(e):
+                        ext = e
+                        break
+
+            # Save to temp file
+            tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+            tmp.write(response.content)
+            tmp.close()
+
+            try:
+                # Run OCR
+                result = self._ocr_read(tmp.name, language, engine, preprocess)
+                if not result.startswith('Error'):
+                    # Add source info
+                    result = f"Source: {url}\nSize: {len(response.content):,} bytes\n{result}"
+                return result
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+
+        except httpx.TimeoutException:
+            return f"Error: Download timed out for {url}"
+        except httpx.HTTPStatusError as e:
+            return f"Error: HTTP {e.response.status_code} when downloading {url}"
+        except Exception as e:
+            return f"Error downloading image: {e}"
 
     # ═══════════════════════════════════════════════════════════════
     # TOOL IMPLEMENTATIONS — VIDEO (v5.0)

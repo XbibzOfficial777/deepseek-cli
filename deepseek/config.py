@@ -65,7 +65,7 @@ DEFAULT_PROVIDERS = {
     'huggingface': {
         'name': 'HuggingFace',
         'type': 'huggingface',
-        'base_url': 'https://api-inference.huggingface.co',
+        'base_url': 'https://router.huggingface.co',
         'api_key_env': 'HUGGINGFACE_API_KEY',
         'default_model': 'Qwen/Qwen2.5-72B-Instruct',
         'enabled': True,
