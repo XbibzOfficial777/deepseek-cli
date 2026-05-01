@@ -30,9 +30,10 @@ console = Console()
 # ══════════════════════════════════════════════════
 # SMART LOOP LIMITS (v5.5)
 # ══════════════════════════════════════════════════
-SMART_MAX_ROUNDS = 70   # Max tool rounds before forced stop
-MAX_SAME_TOOL = 70              # Max consecutive calls to same tool
-MAX_REPEATED_CONTENT = 70   # Max identical content outputs before stop
+# Use config limit (MAX_TOOL_ROUNDS=12) instead of hardcoded 70
+SMART_MAX_ROUNDS = MAX_TOOL_ROUNDS   # Respects config.py limit
+MAX_SAME_TOOL = 3              # Max consecutive calls to same tool
+MAX_REPEATED_CONTENT = 3   # Max identical content outputs before stop
 TOOL_TIMEOUT_DEFAULT = 90      # Default timeout for tool execution (seconds)
 
 # ══════════════════════════════════════════════════

@@ -11,6 +11,8 @@
 #   - Headless mode for server environments
 #   - Anti-detection: randomized UA, window size
 
+from __future__ import annotations
+
 import os
 import re
 import json
@@ -25,6 +27,9 @@ from urllib.parse import urlparse
 from datetime import datetime
 
 # Selenium imports
+SELENIUM_AVAILABLE = False
+WEBDRIVER_MANAGER_AVAILABLE = False
+FirefoxDriver = None  # Type hint placeholder (defined properly below if available)
 try:
     from selenium import webdriver
     from selenium.webdriver.firefox.options import Options as FirefoxOptions
@@ -34,13 +39,23 @@ try:
     from selenium.webdriver.common.action_chains import ActionChains
     from selenium.webdriver.support.ui import WebDriverWait, Select
     from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
+    # FirefoxProfile removed in Selenium 4.9+ — use Options instead
+    try:
+        from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
+    except ImportError:
+        FirefoxProfile = None
     from selenium.common.exceptions import (
         TimeoutException, NoSuchElementException, ElementNotInteractableException,
         StaleElementReferenceException, WebDriverException, NoSuchFrameException,
         NoSuchWindowException, InvalidArgumentException
     )
-    from selenium.webdriver.firefox.webdriver import WebDriver as FirefoxDriver
+    try:
+        from selenium.webdriver.firefox.webdriver import WebDriver as FirefoxDriver
+    except ImportError:
+        FirefoxDriver = None
+
+    if FirefoxDriver is not None:
+        SELENIUM_AVAILABLE = True
 
     # webdriver-manager for auto geckodriver download
     try:
@@ -49,7 +64,6 @@ try:
     except ImportError:
         WEBDRIVER_MANAGER_AVAILABLE = False
 
-    SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
     WEBDRIVER_MANAGER_AVAILABLE = False
@@ -86,7 +100,6 @@ GECKO_PATH = os.environ.get('GECKO_PATH', '/home/z/.wdm/drivers/geckodriver/linu
 
 # Auto-detect geckodriver if default path doesn't exist
 if not os.path.isfile(GECKO_PATH):
-    import shutil
     _found = shutil.which('geckodriver')
     if _found:
         GECKO_PATH = _found

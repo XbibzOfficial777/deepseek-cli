@@ -25,8 +25,14 @@
 import re
 import json
 import os
-import httpx
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode
+
+# httpx is required for webcontrol — graceful error if missing
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
 
 
 # ══════════════════════════════════════

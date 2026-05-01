@@ -34,10 +34,24 @@ from pathlib import Path
 # Pydantic validation (graceful fallback if not installed)
 try:
     from pydantic import BaseModel, ValidationError, create_model
-    from pydantic.fields import FieldInfo
+    # Pydantic v2: FieldInfo moved to pydantic.fields
+    # Pydantic v1: use Field (returns FieldInfo internally)
+    try:
+        from pydantic.fields import FieldInfo
+    except ImportError:
+        # Pydantic v1 fallback
+        try:
+            from pydantic import Field as _Field
+            class FieldInfo:
+                def __init__(self, default=None, description='', **kwargs):
+                    self.default = default
+                    self.description = description
+        except ImportError:
+            FieldInfo = None
     PYDANTIC_AVAILABLE = True
 except ImportError:
     PYDANTIC_AVAILABLE = False
+    FieldInfo = None
 
 
 class ToolRegistry:
