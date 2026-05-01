@@ -379,23 +379,77 @@ def get_mcp_tool_definitions() -> list[dict]:
 # TOOL IMPLEMENTATIONS
 # ══════════════════════════════════════
 
+def _detect_local_tz_name() -> str:
+    """Auto-detect the system's local IANA timezone name."""
+    # Method 1: Read /etc/timezone (Debian/Ubuntu/Termux)
+    try:
+        with open('/etc/timezone', 'r') as f:
+            name = f.read().strip()
+            if name:
+                ZoneInfo(name)  # validate
+                return name
+    except Exception:
+        pass
+    # Method 2: TZ environment variable
+    tz_env = os.environ.get('TZ', '')
+    if tz_env:
+        try:
+            ZoneInfo(tz_env)
+            return tz_env
+        except Exception:
+            pass
+    # Method 3: /etc/localtime symlink (RedHat/CentOS)
+    try:
+        if os.path.exists('/etc/localtime'):
+            target = os.path.realpath('/etc/localtime')
+            if 'zoneinfo/' in target:
+                name = target.split('zoneinfo/')[-1]
+                if name:
+                    ZoneInfo(name)
+                    return name
+    except Exception:
+        pass
+    # Method 4: Match UTC offset
+    try:
+        offset = datetime.datetime.now().astimezone().utcoffset()
+        hours = offset.total_seconds() / 3600
+        offset_map = {
+            7.0: 'Asia/Jakarta', 8.0: 'Asia/Singapore', 9.0: 'Asia/Tokyo',
+            0.0: 'Europe/London', 1.0: 'Europe/Berlin', 5.5: 'Asia/Kolkata',
+            -5.0: 'America/New_York', -6.0: 'America/Chicago',
+            -8.0: 'America/Los_Angeles',
+        }
+        for h, name in offset_map.items():
+            if abs(hours - h) < 0.1:
+                return name
+        sign = '+' if hours >= 0 else ''
+        return f'Etc/GMT{sign}{int(-hours)}' if hours != 0 else 'UTC'
+    except Exception:
+        return 'UTC'
+
+
 def tool_get_datetime(args: dict) -> str:
-    """Get current date/time with timezone support."""
-    tz_name = args.get('timezone', '')
+    """Get current date/time with timezone support, auto-synced to local terminal."""
+    tz_arg = args.get('timezone', '')
     fmt = args.get('format', 'full')
 
+    # Always detect local timezone first
+    local_tz_name = _detect_local_tz_name()
+
+    # Use user-specified timezone or auto-detected local
+    tz_name = tz_arg if tz_arg else local_tz_name
+    tz_display = tz_name  # For display
+
     try:
-        tz = ZoneInfo(tz_name) if tz_name else None
+        tz = ZoneInfo(tz_name)
     except Exception:
-        # Fallback: try common formats
-        for prefix in ('', 'UTC'):
-            try:
-                tz = ZoneInfo(f"{prefix}{tz_name}")
-                break
-            except Exception:
-                continue
-        else:
+        # Fallback to local
+        try:
+            tz = ZoneInfo(local_tz_name)
+            tz_name = local_tz_name
+        except Exception:
             tz = None
+            tz_name = 'Local'
 
     now = datetime.datetime.now(tz)
     day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -409,7 +463,7 @@ def tool_get_datetime(args: dict) -> str:
         return f"{now.strftime('%Y-%m-%d')} ({day_names[now.weekday()]}, {month_names[now.month]} {now.day}, {now.year})"
 
     elif fmt == 'time':
-        return f"{now.strftime('%H:%M:%S')}{' (' + str(tz) + ')' if tz else ''}"
+        return f"{now.strftime('%H:%M:%S')} ({tz_name})"
 
     else:  # full
         iso_week = now.isocalendar()
@@ -421,8 +475,8 @@ def tool_get_datetime(args: dict) -> str:
             f"Date: {day_names[now.weekday()]}, {month_names[now.month]} {now.day}, {now.year}",
             f"Time: {now.strftime('%H:%M:%S')}",
             f"ISO 8601: {now.isoformat()}",
-            f"Timezone: {tz or 'Local'}",
-            f"UTC Offset: {now.strftime('%z')}",
+            f"Timezone: {tz_name}",
+            f"UTC Offset: {now.strftime('%z') or '+0000'}",
             f"",
             f"Details:",
             f"  Week: {iso_week[1]} of {iso_week[0]} (ISO)",
@@ -436,14 +490,20 @@ def tool_get_datetime(args: dict) -> str:
 
 def tool_get_calendar(args: dict) -> str:
     """Display calendar for a month."""
-    year = args.get('year', datetime.datetime.now().year)
-    month = args.get('month', datetime.datetime.now().month)
+    local_tz_name = _detect_local_tz_name()
+    try:
+        local_tz = ZoneInfo(local_tz_name)
+    except Exception:
+        local_tz = None
+
+    year = args.get('year', datetime.datetime.now(local_tz).year)
+    month = args.get('month', datetime.datetime.now(local_tz).month)
     tz_name = args.get('timezone', '')
 
     try:
-        tz = ZoneInfo(tz_name) if tz_name else None
+        tz = ZoneInfo(tz_name) if tz_name else local_tz
     except Exception:
-        tz = None
+        tz = local_tz
 
     now = datetime.datetime.now(tz)
     today = now.day if (now.year == year and now.month == month) else None

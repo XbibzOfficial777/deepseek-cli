@@ -108,6 +108,7 @@ class OpenAICompatibleProvider(BaseProvider):
                     current_tool_calls = {}
                     text_content = ''
                     thinking_content = ''
+                    stream_ended = False
 
                     for line in resp.iter_lines():
                         if not line or not line.startswith('data: '):
@@ -115,6 +116,12 @@ class OpenAICompatibleProvider(BaseProvider):
 
                         data_str = line[6:].strip()
                         if data_str == '[DONE]':
+                            stream_ended = True
+                            # CRITICAL FIX: If content is empty but thinking has text,
+                            # yield thinking as content (reasoning-only model fallback)
+                            if not text_content.strip() and thinking_content.strip():
+                                text_content = thinking_content.strip()
+                                yield {'type': 'content', 'data': text_content}
                             if current_tool_calls:
                                 tc_list = []
                                 for idx in sorted(current_tool_calls.keys()):
@@ -146,7 +153,7 @@ class OpenAICompatibleProvider(BaseProvider):
                             thinking_content += reasoning
                             yield {'type': 'thinking', 'data': reasoning}
 
-                        content = delta.get('content', '')
+                        content = delta.get('content', '') or delta.get('text', '')
                         if content:
                             text_content += content
                             yield {'type': 'content', 'data': content}
@@ -177,6 +184,13 @@ class OpenAICompatibleProvider(BaseProvider):
                    'data': 'Connection failed. Check your internet.'}
         except Exception as e:
             yield {'type': 'error', 'data': f'Error: {str(e)}'}
+        # SAFETY: Always yield done event even if stream was interrupted
+        # This prevents the agent loop from hanging forever
+        if not stream_ended:
+            if not text_content.strip() and thinking_content.strip():
+                text_content = thinking_content.strip()
+                yield {'type': 'content', 'data': text_content}
+            yield {'type': 'done', 'data': None}
 
     def fetch_models(self) -> list[dict]:
         try:
@@ -281,6 +295,8 @@ class GeminiProvider(BaseProvider):
         model = model or self.default_model
         temperature = temperature if temperature is not None else TEMPERATURE
         max_tokens = max_tokens or MAX_TOKENS
+        # Gemini thinking models need more output tokens
+        max_tokens = max(max_tokens, 8192)
         system_text, contents = self._convert_messages(messages)
         payload = {'contents': contents, 'generationConfig': {'temperature': temperature, 'maxOutputTokens': max_tokens}}
         if system_text:
@@ -290,6 +306,7 @@ class GeminiProvider(BaseProvider):
             if converted_tools:
                 payload['tools'] = converted_tools
         url = f'{self.base_url}/models/{model}:streamGenerateContent?alt=sse&key={self.api_key}'
+        stream_ended = False
         try:
             with httpx.Client(timeout=TIMEOUT) as client:
                 with client.stream('POST', url, json=payload, headers={'Content-Type': 'application/json'}) as resp:
@@ -298,6 +315,7 @@ class GeminiProvider(BaseProvider):
                         yield {'type': 'error', 'data': f'Gemini Error {resp.status_code}: {err_body}'}
                         return
                     text_content = ''
+                    thinking_content = ''
                     function_calls = {}
                     for line in resp.iter_lines():
                         if not line or not line.startswith('data: '):
@@ -314,6 +332,12 @@ class GeminiProvider(BaseProvider):
                             continue
                         parts = candidates[0].get('content', {}).get('parts', [])
                         for part in parts:
+                            # Handle thinking/reasoning in Gemini
+                            if 'thought' in part or 'thoughtContent' in part:
+                                thought_text = part.get('thought', '') or part.get('thoughtContent', '')
+                                if thought_text:
+                                    thinking_content += thought_text
+                                    yield {'type': 'thinking', 'data': thought_text}
                             if 'text' in part:
                                 text = part['text']
                                 text_content += text
@@ -329,7 +353,12 @@ class GeminiProvider(BaseProvider):
                                     existing_args.update(fc_args)
                                     function_calls[fc_name]['function']['arguments'] = json.dumps(existing_args)
                         finish = candidates[0].get('finishReason', '')
-                        if finish in ('STOP', 'MAX_TOKENS'):
+                        if finish in ('STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION'):
+                            stream_ended = True
+                            # FIX: If content is empty but thinking has text, yield thinking as content
+                            if not text_content.strip() and thinking_content.strip():
+                                text_content = thinking_content.strip()
+                                yield {'type': 'content', 'data': text_content}
                             if function_calls:
                                 yield {'type': 'tool_calls', 'data': list(function_calls.values())}
                             yield {'type': 'done', 'data': None}
@@ -340,6 +369,9 @@ class GeminiProvider(BaseProvider):
             yield {'type': 'error', 'data': 'Connection failed. Check internet.'}
         except Exception as e:
             yield {'type': 'error', 'data': f'Gemini error: {str(e)}'}
+        # SAFETY: Always yield done event even if stream ended unexpectedly
+        if not stream_ended:
+            yield {'type': 'done', 'data': None}
 
     def fetch_models(self) -> list[dict]:
         try:
@@ -442,6 +474,7 @@ class AnthropicProvider(BaseProvider):
             if converted_tools:
                 payload['tools'] = converted_tools
         headers = {'x-api-key': self.api_key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json'}
+        stream_ended = False
         try:
             with httpx.Client(timeout=TIMEOUT) as client:
                 with client.stream('POST', f'{self.base_url}/messages', json=payload, headers=headers) as resp:
@@ -485,6 +518,7 @@ class AnthropicProvider(BaseProvider):
                                     tool_use_blocks[block_idx]['id'] = block.get('id', '')
                                     tool_use_blocks[block_idx]['function']['name'] = block.get('name', '')
                         elif event_type == 'message_stop':
+                            stream_ended = True
                             if tool_use_blocks:
                                 tc_list = []
                                 for idx in sorted(tool_use_blocks.keys()):
@@ -505,6 +539,9 @@ class AnthropicProvider(BaseProvider):
             yield {'type': 'error', 'data': 'Connection failed. Check internet.'}
         except Exception as e:
             yield {'type': 'error', 'data': f'Anthropic error: {str(e)}'}
+        # SAFETY: Always yield done event
+        if not stream_ended:
+            yield {'type': 'done', 'data': None}
 
     def fetch_models(self) -> list[dict]:
         pconfig = self.config

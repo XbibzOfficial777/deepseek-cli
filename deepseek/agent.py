@@ -1,4 +1,4 @@
-# DeepSeek CLI v6.1 — Smart Agentic Loop (FIXED + Enhanced UI + OCR)
+# DeepSeek CLI v7.2 — Smart Agentic Loop (FIXED + Enhanced UI + OCR + Rich MD)
 # ═══════════════════════════════════════════════════════════════
 # FIXED v5.5 — 8-Point Agent Improvement Plan:
 #   1. Smart loop stop: max_rounds=12, max_same_tool=3, same_tool_counter
@@ -12,6 +12,7 @@
 # ═══════════════════════════════════════════════════════════════
 
 import json
+import re
 import time
 import os
 import traceback
@@ -29,10 +30,10 @@ console = Console()
 # ══════════════════════════════════════════════════
 # SMART LOOP LIMITS (v5.5)
 # ══════════════════════════════════════════════════
-SMART_MAX_ROUNDS = 12       # Max tool rounds before forced stop
-MAX_SAME_TOOL = 3              # Max consecutive calls to same tool
-MAX_REPEATED_CONTENT = 2   # Max identical content outputs before stop
-TOOL_TIMEOUT_DEFAULT = 60      # Default timeout for tool execution (seconds)
+SMART_MAX_ROUNDS = 70   # Max tool rounds before forced stop
+MAX_SAME_TOOL = 70              # Max consecutive calls to same tool
+MAX_REPEATED_CONTENT = 70   # Max identical content outputs before stop
+TOOL_TIMEOUT_DEFAULT = 90      # Default timeout for tool execution (seconds)
 
 # ══════════════════════════════════════════════════
 # LOGGING CONFIG
@@ -213,9 +214,115 @@ class AntiStuckDetector:
         self.content_history.clear()
 
 
-# ══════════════════════════════════════════════════
+# ══════════════════════════════════════
+# TEXT-BASED TOOL CALL PARSER
+# ══════════════════════════════════════
+
+def parse_text_tool_calls(content: str, available_tools: dict) -> list:
+    """
+    Parse tool calls from model text output when the model doesn't use
+    proper structured tool calling format.
+
+    Detects patterns like:
+      <function=name> <param=k> v </function>
+      <function=name>({"key": "value"})
+      browser_navigate(url="https://...")
+      Let me call tool_name with {"arg": "val"}
+      tool_name({"arg": "val"})
+    """
+    if not content or not available_tools:
+        return [], content
+
+    tool_calls = []
+    cleaned = content
+
+    # Pattern 1: <function=name> <param=key> value </function>
+    pattern1 = re.compile(
+        r'<function=(\w+)\s*>(.*?)</function>',
+        re.DOTALL
+    )
+    for m in pattern1.finditer(content):
+        tool_name = m.group(1)
+        args_str = m.group(2).strip()
+        if tool_name in available_tools:
+            args = {}
+            # Parse <param=key> value </param>
+            param_pattern = re.compile(r'<parameter=(\w+)>\s*(.*?)\s*</parameter>', re.DOTALL)
+            for pm in param_pattern.finditer(args_str):
+                args[pm.group(1)] = pm.group(2).strip()
+            # Also try JSON-like parsing
+            if not args:
+                try:
+                    args = json.loads(args_str)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            tool_calls.append({
+                'id': f'text_{tool_name}_{len(tool_calls)}',
+                'type': 'function',
+                'function': {
+                    'name': tool_name,
+                    'arguments': json.dumps(args) if args else '{}'
+                }
+            })
+            cleaned = cleaned.replace(m.group(0), '', 1)
+
+    # Pattern 2: tool_name({"arg": "value"}) or tool_name({json})
+    pattern2 = re.compile(
+        r'\b(\w+)\s*\(\s*(\{[^}]*\})\s*\)',
+        re.DOTALL
+    )
+    for m in pattern2.finditer(cleaned):
+        tool_name = m.group(1)
+        if tool_name in available_tools:
+            args_str = m.group(2).strip()
+            try:
+                args = json.loads(args_str)
+                tool_calls.append({
+                    'id': f'text_{tool_name}_{len(tool_calls)}',
+                    'type': 'function',
+                    'function': {
+                        'name': tool_name,
+                        'arguments': json.dumps(args)
+                    }
+                })
+                cleaned = cleaned.replace(m.group(0), '', 1)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # Pattern 3: tool_name(arg="value", arg2="value")
+    pattern3 = re.compile(
+        r'\b(\w+)\s*\(([^)]+)\)',
+        re.DOTALL
+    )
+    for m in pattern3.finditer(cleaned):
+        tool_name = m.group(1)
+        if tool_name in available_tools:
+            args_str = m.group(2).strip()
+            args = {}
+            # Parse keyword arguments: key="value" or key='value'
+            kw_pattern = re.compile(r'(\w+)\s*=\s*["\']([^"\']*)["\']')
+            for km in kw_pattern.finditer(args_str):
+                args[km.group(1)] = km.group(2).strip()
+            if args:
+                tool_calls.append({
+                    'id': f'text_{tool_name}_{len(tool_calls)}',
+                    'type': 'function',
+                    'function': {
+                        'name': tool_name,
+                        'arguments': json.dumps(args)
+                    }
+                })
+                cleaned = cleaned.replace(m.group(0), '', 1)
+
+    # Clean up residual text
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+
+    return tool_calls, cleaned
+
+
+# ══════════════════════════════════════
 # AGENT
-# ══════════════════════════════════════════════════
+# ══════════════════════════════════════
 
 class Agent:
     """Smart Agentic Loop: sends messages, handles tool calls, feeds results back.
@@ -255,8 +362,6 @@ class Agent:
         last_tool_name = None
         same_tool_counter = 0
         stopped_by = None
-        # v6.1.1: Processing indicator — starts after tools, stops on first LLM chunk
-        processing_indicator = None
 
         # Always send tools
         send_tools = self._tool_functions if self.provider.supports_tools else None
@@ -267,6 +372,7 @@ class Agent:
             thinking_text = ''
             tool_calls_list = []
             has_error = False
+            self.renderer.reset_for_new_round()  # v7.2: reset for markdown re-render per round
 
             for chunk in self.provider.chat_stream(
                 messages=messages,
@@ -275,12 +381,6 @@ class Agent:
             ):
                 chunk_type = chunk['type']
                 chunk_data = chunk['data']
-
-                # v6.1.1: Stop processing indicator on first chunk from LLM
-                if processing_indicator is not None:
-                    processing_indicator.stop()
-                    processing_indicator = None
-                    console.print()  # blank line after indicator
 
                 if chunk_type == 'thinking':
                     thinking_text += chunk_data
@@ -299,10 +399,6 @@ class Agent:
                     pass
 
             if has_error:
-                # v6.1.1: Safety — ensure indicator is stopped on error
-                if processing_indicator is not None:
-                    processing_indicator.stop()
-                    processing_indicator = None
                 self.renderer.show_done()
                 latency = time.time() - start_time
                 self.metrics.record_turn({
@@ -320,10 +416,40 @@ class Agent:
                         'tool_rounds': tool_rounds, 'error': 'Stream error',
                         'stopped_by': 'stream_error', 'metrics': self.metrics.get_summary()}
 
+            # ── FALLBACK: Parse text-based tool calls from content ──
+            if not tool_calls_list and full_content.strip():
+                text_calls, cleaned_content = parse_text_tool_calls(
+                    full_content, self.tools.tools
+                )
+                if text_calls:
+                    tool_calls_list = text_calls
+                    full_content = cleaned_content
+                    console.print(f'\n  [dim cyan](Detected {len(text_calls)} text-based tool call(s))[/dim cyan]')
+
             # ── NO TOOL CALLS → Agent is done speaking ──
             if not tool_calls_list:
-                self.memory.add_assistant(full_content)
-                self.renderer.show_done()
+                # BUG FIX: If content is empty but thinking has text, use thinking as content
+                # DeepSeek R1 and other reasoning models may send all text as reasoning_content
+                # and leave the 'content' field empty, causing blank responses.
+                display_content = full_content
+                if not full_content.strip() and thinking_text.strip():
+                    # Model sent reasoning-only — display thinking as the actual response
+                    display_content = thinking_text.strip()
+                    self.renderer.show_thinking_as_content(thinking_text)
+                    console.print(f'  [dim yellow](Reasoning-only response — thinking shown as answer)[/dim yellow]')
+                    console.print()
+                elif not full_content.strip():
+                    # Model returned completely empty — this is a real bug scenario
+                    display_content = '(No response received from model. Try switching provider/model with /provider or /model)'
+                    self.renderer.show_done()
+                    console.print(f'  [bold yellow]Warning: Model returned an empty response![/bold yellow]')
+                    console.print(f'  [dim]Possible fixes: Switch model (/model), switch provider (/provider), or check your API key (/key)[/dim]')
+                    console.print()
+                else:
+                    # v7.2: Render final response as Rich Markdown (replaces raw streamed text)
+                    self.renderer.render_final(full_content)
+
+                self.memory.add_assistant(display_content)
                 latency = time.time() - start_time
                 self.metrics.record_turn({
                     'user_message': user_message[:200],
@@ -334,9 +460,9 @@ class Agent:
                     'tools_used': tools_used[-10:],
                     'latency': round(latency, 2),
                     'stopped_by': 'natural' if tool_rounds > 0 else 'no_tools',
-                    'content_preview': full_content[:200],
+                    'content_preview': display_content[:200],
                 })
-                return {'content': full_content,
+                return {'content': display_content,
                         'tool_rounds': tool_rounds, 'error': None,
                         'stopped_by': 'natural', 'metrics': self.metrics.get_summary()}
 
@@ -455,23 +581,13 @@ class Agent:
 
             console.print()
 
-            # ── ANIMATED INDICATOR: Processing tool results ──
-            # Starts immediately after tools finish, runs UNTIL the LLM
-            # sends its first chunk (thinking or content). Covers the
-            # network latency of the next API call — so the user always
-            # sees the animation instead of a blank terminal.
-            processing_indicator = ToolProcessingIndicator(
-                round_num=tool_rounds,
-                max_rounds=SMART_MAX_ROUNDS,
-                tools_count=round_tool_count,
-            )
-            processing_indicator.start()
+            # ── PROFESSIONAL ANIMATED INDICATOR: Processing tool results ──
+            with ToolProcessingIndicator(round_num=tool_rounds, max_rounds=SMART_MAX_ROUNDS,
+                                         tools_count=round_tool_count):
+                # Brief pause so the spinner is visible to the user
+                time.sleep(0.15)
 
         # ── MAX ROUNDS REACHED ──
-        # v6.1.1: Safety — ensure indicator is stopped
-        if processing_indicator is not None:
-            processing_indicator.stop()
-            processing_indicator = None
         console.print(f'\n  [bold yellow]  [MAX ROUNDS] Reached {SMART_MAX_ROUNDS} tool rounds — forcing stop[/bold yellow]')
         self.memory.add_assistant(full_content + "\n\n[System: Stopped — max tool rounds reached]")
         self.renderer.show_done()
@@ -501,3 +617,76 @@ class Agent:
     def set_provider(self, provider: BaseProvider):
         """Switch to a different provider."""
         self.provider = provider
+
+    def chat_with_files(self, user_message: str, files: list[dict]) -> dict:
+        """
+        Process a user message with file attachments from connectors (Telegram/Discord).
+        Files are described as dicts: {'filename': str, 'url': str|None, 'path': str|None,
+                                       'mime_type': str, 'size': int, 'caption': str|None}
+        The agent will use tools to process the files and respond.
+
+        Returns same dict as chat().
+        """
+        # Build enriched message with file info
+        file_descriptions = []
+        for f in files:
+            desc_parts = []
+            desc_parts.append(f"File: {f.get('filename', 'unknown')}")
+            if f.get('mime_type'):
+                desc_parts.append(f"Type: {f['mime_type']}")
+            if f.get('size'):
+                size_kb = f['size'] / 1024
+                desc_parts.append(f"Size: {size_kb:.1f} KB")
+            if f.get('url'):
+                desc_parts.append(f"URL: {f['url']}")
+            if f.get('path'):
+                desc_parts.append(f"Local path: {f['path']}")
+            if f.get('caption'):
+                desc_parts.append(f"Caption: {f['caption']}")
+            file_descriptions.append(' | '.join(desc_parts))
+
+        # Create enriched user message
+        if file_descriptions:
+            enriched = (
+                f"{user_message}\n\n"
+                f"[FILE ATTACHMENTS from connector ({len(files)} file(s))]\n"
+                + '\n'.join(file_descriptions)
+                + "\n\nIMPORTANT: Use the appropriate tool to process these files "
+                "(read_file for local paths, web_fetch for URLs, read_pdf for PDFs, "
+                "read_docx for DOCX, image_view/image_info for images, ocr_read for OCR, "
+                "video_info for videos). Analyze the file content and respond to the user's question."
+            )
+        else:
+            enriched = user_message
+
+        # If files have local paths, verify they exist and provide info
+        file_paths = [f.get('path') for f in files if f.get('path')]
+        file_urls = [f.get('url') for f in files if f.get('url')]
+
+        # For file URLs, we can download them first if needed
+        if file_urls:
+            try:
+                import httpx
+                for f in files:
+                    url = f.get('url')
+                    filename = f.get('filename', '')
+                    if not url or not filename:
+                        continue
+                    # Download to temp directory
+                    save_dir = os.path.join(os.path.expanduser('~'), '.deepseek-cli', 'uploads')
+                    os.makedirs(save_dir, exist_ok=True)
+                    save_path = os.path.join(save_dir, filename)
+                    try:
+                        with httpx.Client(timeout=30, follow_redirects=True) as client:
+                            r = client.get(url)
+                            if r.status_code == 200:
+                                with open(save_path, 'wb') as out_f:
+                                    out_f.write(r.content)
+                                f['path'] = save_path
+                                file_paths.append(save_path)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        return self.chat(enriched)

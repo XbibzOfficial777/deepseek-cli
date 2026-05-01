@@ -1,12 +1,16 @@
-# DeepSeek CLI v6.1 — Tool Registry (65+ Tools)
+# DeepSeek CLI v7.5 — Tool Registry (90+ Tools)
 # File, Web, Code, System, Math, Utility + PDF, DOCX, Image, Video, APK, OCR
 # + Live Search, Live Model Search, MCP Real-Time Data (16 tools)
 # + Web Browser Control (10 tools): Navigate, Login, Click, Fill, Snapshot, etc.
+# + Selenium Browser (12 tools): Real browser automation via Firefox/Geckodriver
 # + OCR Tools (v6.1): ocr_read, ocr_url — Tesseract + EasyOCR fallback
+# + Document Tools (v7.5): PPTX (4), XLSX (4), DOCX Edit, CSV (2), Convert (1)
 # NO USAGE LIMITS — all tools available at all times
 #
 # v5.5 ADDED: Pydantic validation layer for tool inputs
 # v6.1 ADDED: OCR support (pytesseract + easyocr fallback)
+# v7.0 ADDED: Selenium browser automation (12 tools)
+# v7.5 ADDED: Full PPTX/XLSX/DOCX Edit/CSV/Document Conversion tools (11 tools)
 
 import os
 import sys
@@ -197,6 +201,8 @@ class ToolRegistry:
         self._register_search_tools()
         self._register_mcp_tools()
         self._register_browser_tools()
+        self._register_selenium_tools()
+        self._register_doc_tools()
 
     # ══════════════════════════════════════
     # MCP REAL-TIME DATA TOOLS (v5.2)
@@ -776,6 +782,33 @@ class ToolRegistry:
             },
             lambda args: self._image_info(args['path'])
         )
+
+    # ══════════════════════════════════════
+    # DOCUMENT TOOLS (v7.5)
+    # PPTX: read, create, edit, info
+    # XLSX: read, create, edit, info
+    # DOCX: edit (append, replace, tables, properties)
+    # CSV: read, create
+    # Conversion: xlsx<->csv, md->docx/pdf, txt->docx, json->xlsx/csv
+    # ══════════════════════════════════════
+
+    def _register_doc_tools(self):
+        try:
+            from .doc_tools import get_doc_tool_definitions, execute_doc_tool
+
+            for defn in get_doc_tool_definitions():
+                fn = defn['function']
+                name = fn['name']
+                self.register(
+                    name,
+                    fn['description'],
+                    fn['parameters'],
+                    (lambda n: lambda args: execute_doc_tool(n, args))(name)
+                )
+        except ImportError:
+            pass
+        except Exception:
+            pass
 
     # ══════════════════════════════════════
     # OCR TOOLS (v6.1)
@@ -1455,15 +1488,120 @@ class ToolRegistry:
         except Exception as e:
             return f"Conversion error: {e}"
 
-    def _timestamp(self, unix_ts=None, tz='local') -> str:
+    def _detect_local_timezone(self) -> str:
+        """Auto-detect the system's local IANA timezone name."""
+        # Method 1: Read /etc/timezone (Debian/Ubuntu/Termux)
         try:
-            if unix_ts:
-                dt = datetime.datetime.fromtimestamp(float(unix_ts))
+            with open('/etc/timezone', 'r') as f:
+                tz_name = f.read().strip()
+                if tz_name:
+                    # Validate by trying to load it
+                    from zoneinfo import ZoneInfo
+                    ZoneInfo(tz_name)
+                    return tz_name
+        except Exception:
+            pass
+
+        # Method 2: Check TZ environment variable
+        tz_env = os.environ.get('TZ', '')
+        if tz_env:
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(tz_env)
+                return tz_env
+            except Exception:
+                pass
+
+        # Method 3: Read /etc/localtime symlink (RedHat/CentOS/Fedora)
+        try:
+            if os.path.exists('/etc/localtime'):
+                target = os.path.realpath('/etc/localtime')
+                # Usually resolves to /usr/share/zoneinfo/Asia/Jakarta
+                if 'zoneinfo/' in target:
+                    tz_name = target.split('zoneinfo/')[-1]
+                    if tz_name:
+                        from zoneinfo import ZoneInfo
+                        ZoneInfo(tz_name)
+                        return tz_name
+        except Exception:
+            pass
+
+        # Method 4: Match UTC offset to common timezones
+        try:
+            local_offset = datetime.datetime.now().astimezone().utcoffset()
+            offset_hours = local_offset.total_seconds() / 3600
+            # Common timezone mapping
+            offset_map = {
+                7.0: 'Asia/Jakarta',      # WIB (Western Indonesia Time)
+                8.0: 'Asia/Singapore',     # SGT / WITA
+                9.0: 'Asia/Tokyo',         # JST / WIT
+                0.0: 'Europe/London',       # GMT
+                1.0: 'Europe/Berlin',       # CET
+                5.5: 'Asia/Kolkata',        # IST
+                -5.0: 'America/New_York',   # EST
+                -6.0: 'America/Chicago',    # CST
+                -8.0: 'America/Los_Angeles',# PST
+            }
+            # Find closest match (within 0.1 hours)
+            for offset, name in offset_map.items():
+                if abs(offset_hours - offset) < 0.1:
+                    return name
+            # Fallback: use Etc/GMT format
+            sign = '+' if offset_hours >= 0 else ''
+            return f'Etc/GMT{sign}{int(-offset_hours)}' if offset_hours != 0 else 'UTC'
+        except Exception:
+            pass
+
+        return 'UTC'
+
+    def _timestamp(self, unix_ts=None, tz='local') -> str:
+        """Get current date/time with proper timezone detection synced to local terminal."""
+        try:
+            # Detect local timezone for 'local' parameter
+            local_tz_name = self._detect_local_timezone()
+
+            if tz == 'local' or not tz:
+                tz_name = local_tz_name
             else:
-                dt = datetime.datetime.now()
-            return dt.strftime(f"%Y-%m-%d %H:%M:%S ({tz})")
+                tz_name = tz
+
+            # Parse timezone
+            try:
+                from zoneinfo import ZoneInfo
+                tz_info = ZoneInfo(tz_name)
+            except Exception:
+                tz_info = None
+                tz_name = local_tz_name
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz_info = ZoneInfo(tz_name)
+                except Exception:
+                    tz_info = None
+
+            if unix_ts:
+                dt = datetime.datetime.fromtimestamp(float(unix_ts), tz=tz_info)
+            else:
+                dt = datetime.datetime.now(tz=tz_info)
+
+            # Build comprehensive output
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            month_names = ['January', 'February', 'March', 'April', 'May', 'June',
+                          'July', 'August', 'September', 'October', 'November', 'December']
+
+            lines = [
+                f"Date: {day_names[dt.weekday()]}, {month_names[dt.month]} {dt.day}, {dt.year}",
+                f"Time: {dt.strftime('%H:%M:%S')}",
+                f"Timezone: {tz_name}",
+                f"UTC Offset: {dt.strftime('%z') or '+0000'}",
+                f"Unix Timestamp: {int(dt.timestamp())}",
+            ]
+            return '\n'.join(lines)
         except Exception as e:
-            return f"Error: {e}"
+            # Ultimate fallback: raw system time
+            try:
+                return f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (local)"
+            except Exception:
+                return f"Error: {e}"
 
     def _text_transform(self, text: str, operation: str) -> str:
         ops = {
@@ -3186,3 +3324,919 @@ class ToolRegistry:
             return '\n'.join(parts)
         except Exception as e:
             return f"Error: {e}"
+
+    # ═══════════════════════════════════════════════════════════════
+    # SELENIUM BROWSER TOOLS (v7.0)
+    # Real browser automation using Selenium + Firefox + Geckodriver
+    # 12 advanced tools: Navigate, Smart Login, Click, Type, Screenshot,
+    # JS Execute, Wait, Scrape, Dropdown, Scroll, Cookies, Close
+    # Graceful fallback — tools show install instructions if Selenium unavailable
+    # ═══════════════════════════════════════════════════════════════
+
+    def _se_not_available(self) -> str:
+        return ('[SELENIUM] Selenium browser is not available or failed to connect.\n'
+                'Firefox or geckodriver is not installed/cannot start on this system.\n'
+                '\n'
+                'INSTEAD, use these HTTP-based browser tools (NO Firefox needed):\n'
+                '  - browser_navigate: Open URL and get page info\n'
+                '  - browser_snapshot: Full page snapshot (text, links, forms, images)\n'
+                '  - browser_click: Click links/buttons by text or CSS selector\n'
+                '  - browser_fill_form: Fill and submit forms\n'
+                '  - browser_extract: Extract content by CSS selector\n'
+                '  - browser_download: Download files from URLs\n'
+                '  - browser_action: General web action (navigate, click, fill, etc.)\n'
+                '  - browser_screenshot: Visual text-based page rendering\n'
+                '\n'
+                'These tools use HTTP requests and work on ANY system (no browser install needed).')
+
+    def _se_connection_error(self, error: Exception) -> str:
+        """Handle Selenium connection/driver errors with helpful fallback message."""
+        err_str = str(error)
+        # Check common error patterns
+        if 'Connection refused' in err_str or 'Max retries exceeded' in err_str:
+            return ('[SELENIUM] Browser connection failed — geckodriver is not running.\n'
+                    'Error: ' + err_str[:200] + '\n'
+                    '\n'
+                    'FIX: Use HTTP-based browser tools instead (no Firefox/geckodriver needed):\n'
+                    '  browser_navigate, browser_snapshot, browser_click, browser_fill_form,\n'
+                    '  browser_extract, browser_download, browser_action, browser_screenshot')
+        elif 'Firefox' in err_str or 'firefox' in err_str:
+            return ('[SELENIUM] Firefox browser not found or cannot start.\n'
+                    'Error: ' + err_str[:200] + '\n'
+                    '\n'
+                    'FIX: Use browser_navigate, browser_snapshot, and other browser_* tools instead.\n'
+                    'These work via HTTP and need NO browser installation.')
+        else:
+            return ('[SELENIUM] Browser error: ' + err_str[:300] + '\n'
+                    '\n'
+                    'FIX: Use browser_navigate, browser_snapshot, and other browser_* tools instead.')
+
+    def _register_selenium_tools(self):
+        # Check availability (don't register if missing)
+        try:
+            from .selenium_browser import SELENIUM_AVAILABLE
+            if not SELENIUM_AVAILABLE:
+                return
+        except ImportError:
+            return
+
+        self.register(
+            'se_navigate',
+            'SELENIUM BROWSER: Open a URL in a real Firefox browser. '
+            'Renders full page with JavaScript, returns title, text, link/form/image counts. '
+            'Use this as the first step for any Selenium-based interaction. '
+            'Supports dynamic content, SPAs, and JavaScript-rendered pages.',
+            {
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'Full URL to navigate to'},
+                    'wait_seconds': {'type': 'number', 'description': 'Seconds to wait for page load (default 3)'}
+                },
+                'required': ['url']
+            },
+            lambda args: self._se_navigate(args['url'], args.get('wait_seconds', 3))
+        )
+
+        self.register(
+            'se_login',
+            'SELENIUM BROWSER: Advanced login automation with smart field detection. '
+            'Auto-detects username/password fields by common patterns (name, id, type, placeholder). '
+            'Handles form submission, waits for redirect, detects login errors. '
+            'Supports custom field names and submit button text. '
+            'Maintains cookies after login for subsequent requests.',
+            {
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'Login page URL'},
+                    'username': {'type': 'string', 'description': 'Username or email'},
+                    'password': {'type': 'string', 'description': 'Password'},
+                    'username_field': {'type': 'string', 'description': 'Custom CSS/name/id for username field (auto-detect if empty)'},
+                    'password_field': {'type': 'string', 'description': 'Custom CSS/name/id for password field (auto-detect if empty)'},
+                    'submit_text': {'type': 'string', 'description': 'Text of the submit button to click (auto-detect if empty)'},
+                    'wait_for_url': {'type': 'string', 'description': 'Wait until URL contains this string (confirms login success)'},
+                    'wait_seconds': {'type': 'number', 'description': 'Seconds to wait after submit (default 5)'}
+                },
+                'required': ['url', 'username', 'password']
+            },
+            lambda args: self._se_login(
+                args['url'], args['username'], args['password'],
+                args.get('username_field', ''), args.get('password_field', ''),
+                args.get('submit_text', ''), args.get('wait_for_url', ''),
+                args.get('wait_seconds', 5)
+            )
+        )
+
+        self.register(
+            'se_click',
+            'SELENIUM BROWSER: Click an element on the current page. '
+            'Scrolls into view, waits for clickable, then clicks. '
+            'Supports text matching, CSS selector, XPath, ID, or name.',
+            {
+                'type': 'object',
+                'properties': {
+                    'target': {'type': 'string', 'description': 'Element text, CSS selector, XPath, ID, or name'},
+                    'by': {'type': 'string', 'description': 'Search method: text, css, xpath, id, name (default: text)'},
+                    'wait_seconds': {'type': 'number', 'description': 'Max wait for element to be clickable (default 3)'}
+                },
+                'required': ['target']
+            },
+            lambda args: self._se_click(args['target'], args.get('by', 'text'), args.get('wait_seconds', 3))
+        )
+
+        self.register(
+            'se_type',
+            'SELENIUM BROWSER: Type text into an input field. '
+            'Clears existing text first, types character by character for realism. '
+            'Optionally presses Enter after typing.',
+            {
+                'type': 'object',
+                'properties': {
+                    'target': {'type': 'string', 'description': 'CSS selector, XPath, ID, or name of the input field'},
+                    'text': {'type': 'string', 'description': 'Text to type into the field'},
+                    'by': {'type': 'string', 'description': 'Search method: css, xpath, id, name (default: css)'},
+                    'clear_first': {'type': 'boolean', 'description': 'Clear field before typing (default true)'},
+                    'press_enter': {'type': 'boolean', 'description': 'Press Enter after typing (default false)'}
+                },
+                'required': ['target', 'text']
+            },
+            lambda args: self._se_type(
+                args['target'], args['text'], args.get('by', 'css'),
+                args.get('clear_first', True), args.get('press_enter', False)
+            )
+        )
+
+        self.register(
+            'se_screenshot',
+            'SELENIUM BROWSER: Take a real PNG screenshot of the current page. '
+            'Saves to temp directory. Supports full-page scrolling screenshots. '
+            'Returns file path and size.',
+            {
+                'type': 'object',
+                'properties': {
+                    'filename': {'type': 'string', 'description': 'Output filename (auto-generated if empty)'},
+                    'full_page': {'type': 'boolean', 'description': 'Capture full scrolling page (default false)'}
+                },
+                'required': []
+            },
+            lambda args: self._se_screenshot(args.get('filename', ''), args.get('full_page', False))
+        )
+
+        self.register(
+            'se_execute_js',
+            'SELENIUM BROWSER: Execute JavaScript code in the browser page. '
+            'Returns the result. Use for custom interactions, data extraction, '
+            'or page manipulation. Has access to full DOM API.',
+            {
+                'type': 'object',
+                'properties': {
+                    'script': {'type': 'string', 'description': 'JavaScript code to execute'}
+                },
+                'required': ['script']
+            },
+            lambda args: self._se_execute_js(args['script'])
+        )
+
+        self.register(
+            'se_wait_for',
+            'SELENIUM BROWSER: Smart wait for a condition to become true. '
+            'Conditions: element, visible, clickable, text, url_contains, title_contains, page_load, alert, gone.',
+            {
+                'type': 'object',
+                'properties': {
+                    'condition': {'type': 'string', 'description': 'Wait condition: element, visible, clickable, text, url_contains, title_contains, page_load, alert, gone'},
+                    'value': {'type': 'string', 'description': 'Value to wait for (CSS selector, text, URL, etc.)'},
+                    'timeout': {'type': 'number', 'description': 'Max wait in seconds (default 10)'}
+                },
+                'required': ['condition', 'value']
+            },
+            lambda args: self._se_wait_for(args['condition'], args['value'], args.get('timeout', 10))
+        )
+
+        self.register(
+            'se_scrape',
+            'SELENIUM BROWSER: Scrape content from the current page. '
+            'Extract types: text, links, images, forms, tables, html, meta, all. '
+            'Optionally filter by CSS selector.',
+            {
+                'type': 'object',
+                'properties': {
+                    'extract': {'type': 'string', 'description': 'What to extract: text, links, images, forms, tables, html, meta, all (default: text)'},
+                    'css_selector': {'type': 'string', 'description': 'Optional CSS selector to filter elements'},
+                    'max_items': {'type': 'integer', 'description': 'Max items to return (default 50)'}
+                },
+                'required': []
+            },
+            lambda args: self._se_scrape(args.get('extract', 'text'), args.get('css_selector', ''), args.get('max_items', 50))
+        )
+
+        self.register(
+            'se_dropdown',
+            'SELENIUM BROWSER: Select an option from a dropdown (select) element.',
+            {
+                'type': 'object',
+                'properties': {
+                    'target': {'type': 'string', 'description': 'CSS selector, XPath, ID, or name of the select element'},
+                    'value': {'type': 'string', 'description': 'Option to select (text, value, or index number)'},
+                    'by': {'type': 'string', 'description': 'Search method for dropdown: css, xpath, id, name (default: css)'},
+                    'select_by': {'type': 'string', 'description': 'How to select: value, text, index (default: value)'}
+                },
+                'required': ['target', 'value']
+            },
+            lambda args: self._se_dropdown(args['target'], args['value'], args.get('by', 'css'), args.get('select_by', 'value'))
+        )
+
+        self.register(
+            'se_scroll',
+            'SELENIUM BROWSER: Scroll the page in any direction or to an element. '
+            'Directions: down, up, top, bottom. Can also scroll to a specific element.',
+            {
+                'type': 'object',
+                'properties': {
+                    'direction': {'type': 'string', 'description': 'Scroll direction: down, up, top, bottom (default: down)'},
+                    'amount': {'type': 'integer', 'description': 'Pixels to scroll (default 500)'},
+                    'to_element': {'type': 'string', 'description': 'CSS selector of element to scroll into view'},
+                    'by': {'type': 'string', 'description': 'Search method for to_element: css, xpath (default: css)'}
+                },
+                'required': []
+            },
+            lambda args: self._se_scroll(
+                args.get('direction', 'down'), args.get('amount', 500),
+                args.get('to_element', ''), args.get('by', 'css')
+            )
+        )
+
+        self.register(
+            'se_cookies',
+            'SELENIUM BROWSER: View or manage browser cookies. '
+            'Actions: view, clear, clear_storage (localStorage + sessionStorage).',
+            {
+                'type': 'object',
+                'properties': {
+                    'action': {'type': 'string', 'description': 'Action: view (default), clear, clear_storage'},
+                    'domain': {'type': 'string', 'description': 'Filter cookies by domain (view action only)'}
+                },
+                'required': []
+            },
+            lambda args: self._se_cookies(args.get('action', 'view'), args.get('domain', ''))
+        )
+
+        self.register(
+            'se_close',
+            'SELENIUM BROWSER: Close the browser session and free resources. '
+            'Call this when done with browser automation to release memory.',
+            {
+                'type': 'object',
+                'properties': {},
+                'required': []
+            },
+            lambda args: self._se_close()
+        )
+
+        # ══════════════════════════════════════════════════
+        # ADVANCED AUTH AUTOMATION TOOLS (v7.3)
+        # Google OAuth, Auth Detection, 2FA, CAPTCHA,
+        # Popup Windows, GUI Mode, Cookie Import/Export
+        # ══════════════════════════════════════════════════
+
+        self.register(
+            'se_google_login',
+            'SELENIUM BROWSER: Full Google "Sign in with Google" automation. '
+            'Handles: click Google button, email input, password input, account picker, '
+            '2FA/OTP code, consent/permission screen, CAPTCHA detection. '
+            'If CAPTCHA detected, returns needs_gui=true for manual fallback.',
+            {
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'URL of the page with Google login button'},
+                    'email': {'type': 'string', 'description': 'Google email/phone'},
+                    'password': {'type': 'string', 'description': 'Google password'},
+                    'otp_code': {'type': 'string', 'description': '2FA/OTP code if account has 2-step verification (optional)'},
+                    'button_text': {'type': 'string', 'description': 'Text of the "Sign in with Google" button (auto-detect if empty)'}
+                },
+                'required': ['url', 'email', 'password']
+            },
+            lambda args: self._se_google_login(
+                args['url'], args['email'], args['password'],
+                args.get('otp_code', ''), args.get('button_text', '')
+            )
+        )
+
+        self.register(
+            'se_detect_auth',
+            'SELENIUM BROWSER: Detect what type of authentication form is on the current page. '
+            'Identifies: Google OAuth, GitHub OAuth, Facebook OAuth, Twitter/X OAuth, '
+            'Discord OAuth, Microsoft OAuth, Apple OAuth, basic login forms, 2FA, CAPTCHA, SSO/SAML. '
+            'Returns detected fields and suggested tools to use.',
+            {
+                'type': 'object',
+                'properties': {},
+                'required': []
+            },
+            lambda args: self._se_detect_auth()
+        )
+
+        self.register(
+            'se_open_gui',
+            'SELENIUM BROWSER: Open GUI mode when automated login fails. '
+            'On Termux: launches Termux X11/VNC and opens the URL for manual auth completion. '
+            'On Desktop: opens the URL in the system browser for manual login. '
+            'After manual completion, use se_import_cookies to bring cookies back.',
+            {
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'URL to open in GUI browser (default: current page)'},
+                    'purpose': {'type': 'string', 'description': 'Purpose description (default: "login")'}
+                },
+                'required': []
+            },
+            lambda args: self._se_open_gui(args.get('url', ''), args.get('purpose', 'login'))
+        )
+
+        self.register(
+            'se_popup',
+            'SELENIUM BROWSER: Manage popup windows and tabs opened by OAuth/social login. '
+            'Actions: list (all open windows), switch (to specific window), close_popup (close all popups). '
+            'Use after clicking social login buttons that open new tabs.',
+            {
+                'type': 'object',
+                'properties': {
+                    'action': {'type': 'string', 'description': 'Action: list, switch, close_popup (default: list)'},
+                    'window_index': {'type': 'integer', 'description': 'Window index to switch to (for switch action, default 1)'}
+                },
+                'required': []
+            },
+            lambda args: self._se_popup(args.get('action', 'list'), args.get('window_index', 1))
+        )
+
+        self.register(
+            'se_switch_frame',
+            'SELENIUM BROWSER: Switch to or list iframes. '
+            'Many OAuth login buttons are embedded in iframes. '
+            'Use list action to see all iframes, then switch to interact with them. '
+            'Use "main" to switch back to main content.',
+            {
+                'type': 'object',
+                'properties': {
+                    'frame': {'type': 'string', 'description': 'Frame index, id, name, or "main" (default: empty = list all)'}
+                },
+                'required': []
+            },
+            lambda args: self._se_switch_frame(args.get('frame', ''))
+        )
+
+        self.register(
+            'se_import_cookies',
+            'SELENIUM BROWSER: Import cookies from JSON file or JSON string. '
+            'Use after manual login via se_open_gui to import cookies back. '
+            'Restores login session without re-entering credentials.',
+            {
+                'type': 'object',
+                'properties': {
+                    'source': {'type': 'string', 'description': 'JSON file path or JSON string containing cookies array'},
+                    'is_file': {'type': 'boolean', 'description': 'True if source is a file path, False if JSON string (default true)'}
+                },
+                'required': ['source']
+            },
+            lambda args: self._se_import_cookies(args['source'], args.get('is_file', True))
+        )
+
+        self.register(
+            'se_export_cookies',
+            'SELENIUM BROWSER: Export current browser cookies to a JSON file. '
+            'Save cookies after login so you can import them later. '
+            'Useful for persisting login sessions across restarts.',
+            {
+                'type': 'object',
+                'properties': {
+                    'save_to': {'type': 'string', 'description': 'File path to save cookies JSON (default: auto-generated)'}
+                },
+                'required': []
+            },
+            lambda args: self._se_export_cookies(args.get('save_to', ''))
+        )
+
+        self.register(
+            'se_upload',
+            'SELENIUM BROWSER: Upload a file to a file input element on the page.',
+            {
+                'type': 'object',
+                'properties': {
+                    'target': {'type': 'string', 'description': 'CSS selector of the file input element'},
+                    'file_path': {'type': 'string', 'description': 'Path to the file to upload'}
+                },
+                'required': ['target', 'file_path']
+            },
+            lambda args: self._se_upload(args['target'], args['file_path'])
+        )
+
+        # ── v7.4: Auth Automation Tools ──
+
+        self.register(
+            'se_auth_google',
+            'AUTH: Automate Google OAuth login. Handles email/password fields, 2FA detection, '
+            'iframe switching, and popup handling. If login fails, suggests GUI mode switch. '
+            'IMPORTANT: For 2FA/CAPTCHA, use se_switch_to_gui first for manual completion.',
+            {
+                'type': 'object',
+                'properties': {
+                    'email': {'type': 'string', 'description': 'Google account email'},
+                    'password': {'type': 'string', 'description': 'Google account password'},
+                    'login_url': {'type': 'string', 'description': 'Login URL (default: Google sign-in page)'},
+                    'timeout': {'type': 'number', 'description': 'Max wait time in seconds (default 60)'},
+                },
+                'required': ['email'],
+            },
+            lambda args: self._se_get_session().auth_google(
+                args['email'], args.get('password', ''),
+                args.get('login_url', ''), args.get('timeout', 60)
+            )
+        )
+
+        self.register(
+            'se_auth_generic',
+            'AUTH: Generic login automation with GUI fallback. Tries headless first, '
+            'auto-switches to GUI browser if login fails. Good for complex auth flows, '
+            'CAPTCHAs, or sites that block headless browsers.',
+            {
+                'type': 'object',
+                'properties': {
+                    'url': {'type': 'string', 'description': 'Login page URL'},
+                    'email': {'type': 'string', 'description': 'Email/username'},
+                    'password': {'type': 'string', 'description': 'Password'},
+                    'email_selector': {'type': 'string', 'description': 'CSS selector for email field (auto-detect if empty)'},
+                    'password_selector': {'type': 'string', 'description': 'CSS selector for password field (auto-detect if empty)'},
+                    'submit_selector': {'type': 'string', 'description': 'CSS selector for submit button (auto-detect if empty)'},
+                    'wait_for_url': {'type': 'string', 'description': 'Wait for URL containing this string after login'},
+                    'auto_gui_fallback': {'type': 'boolean', 'description': 'Auto-switch to GUI if headless fails (default true)'},
+                },
+                'required': ['url'],
+            },
+            lambda args: self._se_get_session().auth_generic(
+                args['url'], args.get('email', ''), args.get('password', ''),
+                args.get('email_selector', ''), args.get('password_selector', ''),
+                args.get('submit_selector', ''), args.get('wait_for_url', ''),
+                args.get('auto_gui_fallback', True),
+            )
+        )
+
+        self.register(
+            'se_switch_to_gui',
+            'AUTH: Switch browser from headless to GUI mode. On Termux: auto-launches Termux X11. '
+            'On Desktop: uses native X11 display. Required for completing logins with CAPTCHA, '
+            '2FA, or other interactive challenges that need a visible browser.',
+            {
+                'type': 'object',
+                'properties': {
+                    'force': {'type': 'boolean', 'description': 'Force re-initialize even if already in GUI mode (default false)'},
+                },
+                'required': [],
+            },
+            lambda args: self._se_get_session().switch_to_gui_mode(force=args.get('force', False))
+        )
+
+        self.register(
+            'se_switch_to_headless',
+            'AUTH: Switch browser back to headless mode (no visible window).',
+            {
+                'type': 'object',
+                'properties': {},
+                'required': [],
+            },
+            lambda args: self._se_get_session().switch_to_headless()
+        )
+
+        self.register(
+            'se_handle_popup',
+            'AUTH: Handle browser alerts/confirms/prompts. Accept or dismiss popups.',
+            {
+                'type': 'object',
+                'properties': {
+                    'action': {'type': 'string', 'description': 'Action: accept, dismiss'},
+                    'timeout': {'type': 'number', 'description': 'Wait timeout in seconds (default 5)'},
+                },
+                'required': [],
+            },
+            lambda args: self._se_get_session().handle_popup(
+                args.get('action', 'accept'), args.get('timeout', 5)
+            )
+        )
+
+        self.register(
+            'se_switch_tab',
+            'AUTH: Switch between browser tabs/windows. Google OAuth often opens new tabs.',
+            {
+                'type': 'object',
+                'properties': {
+                    'tab_index': {'type': 'integer', 'description': 'Tab index (0=first, -1=newest, default -1)'},
+                },
+                'required': [],
+            },
+            lambda args: self._se_get_session().switch_tab(tab_index=args.get('tab_index', -1))
+        )
+
+        self.register(
+            'se_close_tab',
+            'AUTH: Close a browser tab (cannot close the last tab).',
+            {
+                'type': 'object',
+                'properties': {
+                    'tab_index': {'type': 'integer', 'description': 'Tab index to close (default -1 = newest)'},
+                },
+                'required': [],
+            },
+            lambda args: self._se_get_session().close_tab(tab_index=args.get('tab_index', -1))
+        )
+
+    # ── Selenium Tool Handler Implementations ───────────────
+
+    def _se_get_session(self):
+        """Get the Selenium browser session."""
+        try:
+            from .selenium_browser import get_selenium_session
+            return get_selenium_session(headless=True)
+        except ImportError:
+            return None
+
+    def _se_navigate(self, url: str, wait_seconds: float) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.navigate(url, wait_seconds)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_login(self, url: str, username: str, password: str,
+                  username_field: str, password_field: str,
+                  submit_text: str, wait_for_url: str, wait_seconds: float) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.smart_login(
+                url, username, password,
+                username_field, password_field,
+                submit_text, wait_for_url, wait_seconds
+            )
+            if 'error' in result and not result.get('success'):
+                return f"[ERROR] Login failed: {result['error']}\nSteps:\n" + "\n".join(f"  - {s}" for s in result.get('steps', []))
+            output = [
+                f"Login: {'SUCCESS' if result.get('success') else 'FAILED'}",
+                f"URL: {result.get('url', '')}",
+                f"Title: {result.get('title', '')}",
+                f"Cookies: {result.get('cookies', 'N/A')}",
+                "Steps:"
+            ]
+            for s in result.get('steps', []):
+                output.append(f"  - {s}")
+            return '\n'.join(output)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_click(self, target: str, by: str, wait_seconds: float) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.click_element(target, by, wait_seconds)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_type(self, target: str, text: str, by: str, clear_first: bool, press_enter: bool) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.type_text(target, text, by, clear_first, press_enter)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_screenshot(self, filename: str, full_page: bool) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.take_screenshot(filename, full_page)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return (f"Screenshot saved: {result['saved_to']}\n"
+                    f"Size: {result['size_human']}\n"
+                    f"Full page: {result['full_page']}")
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_execute_js(self, script: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.execute_js(script)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return f"Result ({result['result_type']}): {result['result']}"
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_wait_for(self, condition: str, value: str, timeout: float) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.wait_for(condition, value, timeout)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return f"Wait satisfied: {result['condition']}"
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_scrape(self, extract: str, css_selector: str, max_items: int) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.scrape_page(extract, css_selector, max_items)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_dropdown(self, target: str, value: str, by: str, select_by: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.select_dropdown(target, value, by, select_by)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_scroll(self, direction: str, amount: int, to_element: str, by: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.scroll_page(direction, amount, to_element, by)
+            if 'error' in result:
+                return f"[ERROR] {result['error']}"
+            return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_cookies(self, action: str, domain: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            if action == 'clear':
+                result = session.clear_cookies()
+                return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+            elif action == 'clear_storage':
+                result = session.clear_storage()
+                return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+            else:
+                result = session.get_cookies(domain)
+                if 'error' in result:
+                    return f"[ERROR] {result['error']}"
+                output = [f"Browser Cookies ({result['count']} total)"]
+                output.append(f"Domains: {', '.join(result['domains'][:10])}")
+                for c in result['cookies'][:20]:
+                    display_val = str(c.get('value', ''))[:30] + '...' if len(str(c.get('value', ''))) > 30 else str(c.get('value', ''))
+                    output.append(f"  {c.get('name', '?')} = {display_val} (domain: {c.get('domain', '?')})")
+                if len(result['cookies']) > 20:
+                    output.append(f"  ... and {len(result['cookies']) - 20} more")
+                return '\n'.join(output)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_close(self) -> str:
+        try:
+            from .selenium_browser import close_selenium_session
+            close_selenium_session()
+            return "Selenium browser session closed."
+        except ImportError:
+            return self._se_not_available()
+
+    # ── Advanced Auth Tool Handlers (v7.3) ────────────────
+
+    def _se_google_login(self, url: str, email: str, password: str,
+                         otp_code: str, button_text: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.google_oauth_login(url, email, password, otp_code, button_text)
+            # Format output
+            lines = []
+            success = result.get('success', False)
+            needs_gui = result.get('needs_gui', False)
+            needs_otp = result.get('needs_otp', False)
+
+            if success:
+                lines.append('[OK] Google Login SUCCESSFUL')
+                lines.append(f'URL: {result.get("url", "")}')
+                lines.append(f'Title: {result.get("title", "")}')
+                lines.append(f'Cookies: {result.get("cookies", "N/A")}')
+            elif needs_gui:
+                lines.append('[CAPTCHA/GUI] Automated login blocked — manual intervention needed')
+                captcha = result.get('captcha', {})
+                if captcha.get('found'):
+                    lines.append(f'CAPTCHA type: {captcha.get("type", "unknown")}')
+                lines.append('Run se_open_gui to open in GUI browser for manual completion')
+            elif needs_otp:
+                lines.append('[2FA] Two-factor authentication required')
+                lines.append('Call se_google_login again with otp_code parameter')
+            else:
+                lines.append(f'[FAILED] Google login failed')
+                if result.get('message'):
+                    lines.append(f'Reason: {result["message"]}')
+                if result.get('error'):
+                    lines.append(f'Error: {result["error"]}')
+
+            for s in result.get('steps', []):
+                lines.append(f'  {s}')
+
+            return '\n'.join(lines)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_detect_auth(self) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.detect_auth_form()
+            lines = []
+            lines.append(f'URL: {result.get("url", "")}')
+            lines.append(f'Auth Type: {result.get("auth_type", "unknown")}')
+            lines.append(f'Fields: {", ".join(result.get("fields", [])) or "none"}')
+
+            captcha = result.get('has_captcha', False)
+            if captcha:
+                lines.append(f'CAPTCHA: YES ({result.get("captcha_type", "unknown")})')
+
+            for s in result.get('suggestions', []):
+                lines.append(f'Tip: {s}')
+
+            if result.get('error'):
+                lines.append(f'Error: {result["error"]}')
+
+            return '\n'.join(lines)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_open_gui(self, url: str, purpose: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.launch_gui_mode(url or None, purpose)
+            lines = []
+            lines.append(f'Environment: {result.get("environment", "unknown")}')
+            lines.append(f'Purpose: {result.get("purpose", purpose)}')
+
+            if result.get('url'):
+                lines.append(f'URL: {result["url"]}')
+            if result.get('opened_url'):
+                lines.append(f'Opened: {result["opened_url"]}')
+            if result.get('display'):
+                lines.append(f'Display: {result["display"]}')
+            if result.get('vnc_status'):
+                lines.append(f'VNC: {result["vnc_status"]}')
+            if result.get('success'):
+                lines.append(f'Status: Browser opened')
+            if result.get('error'):
+                lines.append(f'Error: {result["error"]}')
+            if result.get('instructions'):
+                for inst_line in result['instructions'].split('\n'):
+                    lines.append(inst_line)
+            if result.get('suggestions'):
+                lines.append('Suggestions:')
+                for s in result['suggestions']:
+                    lines.append(f'  - {s}')
+
+            return '\n'.join(lines)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_popup(self, action: str, window_index: int) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.handle_popup(action, window_index)
+
+            if action == 'list':
+                windows = result.get('windows', [])
+                lines = [f'Open Windows ({len(windows)}):']
+                for w in windows:
+                    current = ' [CURRENT]' if w.get('is_current') else ''
+                    if w.get('error'):
+                        lines.append(f'  [{w.get("index")}] Error')
+                    else:
+                        lines.append(f'  [{w.get("index")}] {w.get("title", "N/A")[:60]}{current}')
+                        lines.append(f'       {w.get("url", "")[:80]}')
+                return '\n'.join(lines)
+            elif action == 'switch':
+                return f'Switched to window [{window_index}]\nTitle: {result.get("title", "")}\nURL: {result.get("url", "")}'
+            elif action == 'close_popup':
+                return f'Closed {result.get("closed", 0)} popup(s)\nRemaining: {result.get("remaining", 1)} window(s)\nURL: {result.get("url", "")}'
+            else:
+                return f'[ERROR] Unknown action: {action}. Use: list, switch, close_popup'
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_switch_frame(self, frame: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            if frame == 'main':
+                result = session.switch_to_main()
+                return f'Switched to main content\nURL: {result.get("url", "")}'
+            elif frame:
+                result = session.switch_to_frame(frame)
+                if 'error' in result:
+                    return f'[ERROR] {result["error"]}'
+                return f'Switched to frame: {frame}\nURL: {result.get("current_url", "")}'
+            else:
+                # List iframes
+                result = session.switch_to_frame('')
+                iframes = result.get('iframes', [])
+                if not iframes:
+                    return 'No iframes found on current page.'
+                lines = [f'Iframes ({len(iframes)}):']
+                for f in iframes:
+                    if f.get('error'):
+                        lines.append(f'  [{f.get("index")}] Error')
+                    else:
+                        lines.append(f'  [{f.get("index")}] id="{f.get("id", "")}" name="{f.get("name", "")}"')
+                        lines.append(f'         src="{f.get("src", "")}" displayed={f.get("displayed", "")}')
+                return '\n'.join(lines)
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_import_cookies(self, source: str, is_file: bool) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            if is_file:
+                p = os.path.expanduser(source)
+                if not os.path.exists(p):
+                    return f'[ERROR] File not found: {source}'
+                with open(p, 'r') as f:
+                    cookies = json.load(f)
+            else:
+                cookies = json.loads(source)
+
+            if not isinstance(cookies, list):
+                return f'[ERROR] Cookies must be a JSON array, got {type(cookies).__name__}'
+
+            result = session.set_cookies(cookies)
+            if 'error' in result:
+                return f'[ERROR] {result["error"]}'
+            return f'Imported {result["cookies_set"]} cookie(s) successfully.\nNavigate to the site to verify the login session.'
+        except json.JSONDecodeError as e:
+            return f'[ERROR] Invalid JSON: {e}'
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_export_cookies(self, save_to: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.extract_cookies(save_to)
+            if 'error' in result:
+                return f'[ERROR] {result["error"]}'
+            return (f'Exported {result["count"]} cookie(s)\n'
+                    f'Saved to: {result["saved_to"]}\n'
+                    f'Import later with: se_import_cookies source="{result["saved_to"]}"')
+        except Exception as e:
+            return self._se_connection_error(e)
+
+    def _se_upload(self, target: str, file_path: str) -> str:
+        session = self._se_get_session()
+        if not session:
+            return self._se_not_available()
+        try:
+            result = session.upload_file(target, file_path)
+            if 'error' in result:
+                return f'[ERROR] {result["error"]}'
+            return (f'File uploaded: {os.path.basename(file_path)}\n'
+                    f'Element: {result["element"]}\n'
+                    f'Full path: {result["file"]}')
+        except Exception as e:
+            return self._se_connection_error(e)

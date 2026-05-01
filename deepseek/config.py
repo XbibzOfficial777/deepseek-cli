@@ -162,7 +162,7 @@ DEFAULT_PROVIDERS = {
 
 # Agent settings
 MAX_TOOL_ROUNDS = 12       # Smart limit — agent stops at 12 rounds (was 99)
-MAX_TOKENS = 4096
+MAX_TOKENS = 16384
 TEMPERATURE = 0.7
 TIMEOUT = 120
 TOOL_TIMEOUT = 15          # Per-tool timeout in seconds (v5.5)
@@ -330,6 +330,36 @@ class ConfigManager:
             self.config['models'] = {}
         self.config['models'][pid] = model
         self.save()
+
+    # ── Connectors ──────────────────────
+
+    def get_connector_config(self, platform: str) -> dict:
+        """Get connector config for a platform (telegram/discord)."""
+        connectors = self.config.get('connectors', {})
+        return connectors.get(platform, {})
+
+    def set_connector_config(self, platform: str, key: str, value):
+        """Set a connector config value."""
+        if 'connectors' not in self.config:
+            self.config['connectors'] = {}
+        if platform not in self.config['connectors']:
+            self.config['connectors'][platform] = {}
+        self.config['connectors'][platform][key] = value
+        self.save()
+
+    def get_connector_token(self, platform: str) -> str:
+        """Get token for a connector platform."""
+        cfg = self.get_connector_config(platform)
+        # Priority: saved config > env var
+        env_map = {'telegram': 'TELEGRAM_BOT_TOKEN', 'discord': 'DISCORD_BOT_TOKEN'}
+        saved = cfg.get('token', '')
+        if saved:
+            return saved
+        return os.environ.get(env_map.get(platform, ''), '')
+
+    def set_connector_token(self, platform: str, token: str):
+        """Save connector token."""
+        self.set_connector_config(platform, 'token', token.strip())
 
 
 def mask_key(key: str) -> str:

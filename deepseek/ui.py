@@ -1,5 +1,5 @@
-# DeepSeek CLI v5.3 — UI Components
-# Rich-based terminal UI: StreamRenderer, LoadingSpinner, Banner
+# DeepSeek CLI v7.7 — UI Components
+# Rich-based terminal UI: StreamRenderer, LoadingSpinner, Banner, StatusBar
 # Raw-mode interactive: arrow-key select menu, Ctrl+P input
 #
 # FIXED v5.1.1:
@@ -11,14 +11,29 @@
 #   - Use sys.stderr for debug instead of stdout to avoid interference
 #
 # FIXED v5.3:
-#   - StreamRenderer: REAL-TIME streaming — content written char-by-char via os.write()
+#   - StreamRenderer: REAL-TIME streaming — content via sys.stdout.write()
 #   - No more buffering entire response before display
 #   - Animated "Thinking..." indicator while model reasons
 #   - Thinking panel auto-flushed when first content chunk arrives
 #   - Zero-latency display: bytes go directly to file descriptor
+#
+# FIXED v7.2:
+#   - StreamRenderer: Rich Markdown rendering for final responses
+#   - Cursor save/restore: raw streamed text replaced with styled Markdown
+#   - **bold**, *italic*, `code`, code blocks, headers, lists, blockquotes
+#   - Syntax-highlighted code blocks (monokai theme)
+#   - Professional AI-style output with colors and formatting
+#
+# FIXED v7.7:
+#   - StreamRenderer: Smooth buffered output (20ms minimum flush interval)
+#   - TUIStatusBar: Compact status bar for tool output
+#   - Improved tool call/result display with professional formatting
+#   - New ASCII art banner v7.7 with feature list
+#   - Better visual separators and color coding throughout
 
 import sys
 import os
+import re
 import threading
 import time
 import tty
@@ -30,7 +45,9 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 from rich import box
+from rich.syntax import Syntax
 from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn, TimeElapsedColumn
+from rich.status import Status
 
 console = Console()
 
@@ -71,25 +88,19 @@ class LoadingSpinner:
             self._thread = None
         # Clear the spinner line: overwrite with spaces, then newline
         try:
-            out_fd = sys.stdout.fileno()
-            os.write(out_fd, b'\r  \033[K')
+            sys.stdout.write('\r  \033[K')
             sys.stdout.flush()
         except Exception:
             pass
 
     def _spin(self):
         idx = 0
-        try:
-            out_fd = sys.stdout.fileno()
-        except Exception:
-            return
         while self._running:
             frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
-            # Use os.write — NOT console.print() (Rich doesn't support flush kwarg)
             line = f'\r  {frame} {self.message}...'
             try:
-                os.write(out_fd, line.encode('utf-8'))
-                # Flush via select or just rely on os.write being direct
+                sys.stdout.write(line)
+                sys.stdout.flush()
             except Exception:
                 pass
             idx += 1
@@ -195,39 +206,38 @@ def _flush_stdin(fd):
 
 class StreamRenderer:
     """
-    Renders streamed LLM output with REAL-TIME display.
+    Renders streamed LLM output with REAL-TIME display + Rich Markdown final render.
 
-    v5.3: Content is written directly to the terminal file descriptor
-    via os.write() for zero-latency streaming. No more buffering the
-    entire response before showing anything.
+    v7.2: During streaming, raw text goes to terminal for instant feedback.
+    On final response (no more tool rounds), raw text is replaced with
+    Rich Markdown rendering — **bold**, *italic*, `code`, code blocks,
+    headers, lists, blockquotes, tables, links — all styled beautifully.
 
     Flow:
-      1. Thinking chunks → animated "Thinking..." indicator
-      2. First content chunk → stop animation, flush thinking panel, start streaming
-      3. Content chunks → written directly to stdout (real-time)
-      4. show_done() → final newline, cleanup
+      1. Thinking chunks -> animated "Thinking..." indicator
+      2. First content chunk -> save cursor, flush thinking panel, start streaming
+      3. Content chunks -> written directly to stdout (real-time)
+      4. render_final() -> restore cursor, clear raw, render Rich Markdown
+      5. show_done() -> final newline, cleanup (for intermediate rounds)
     """
 
     def __init__(self, thinking_visible: bool = True):
         self.thinking_visible = thinking_visible
         self._thinking_text = ''
         self._content_text = ''
-        self._out_fd = -1
         self._thinking_panel_shown = False
         self._stream_started = False
         self._indicator_shown = False
         # Animated thinking indicator
         self._anim_running = False
         self._anim_thread = None
-
-    def _get_fd(self):
-        """Get stdout file descriptor (cached)."""
-        if self._out_fd < 0:
-            try:
-                self._out_fd = sys.stdout.fileno()
-            except Exception:
-                self._out_fd = -1
-        return self._out_fd
+        # v7.2: Cursor save/restore for markdown re-render
+        self._cursor_saved = False
+        # v7.7: TUI improvements
+        self._write_buffer = ''       # Buffer for smooth output
+        self._buffer_lock = threading.Lock()
+        self._last_flush_time = 0
+        self._flush_interval = 0.02  # 20ms minimum between flushes
 
     # ── Thinking Animation ──
 
@@ -248,25 +258,22 @@ class StreamRenderer:
             self._anim_thread = None
         # Clear the indicator line from terminal
         if was_running:
-            fd = self._get_fd()
-            if fd >= 0:
-                try:
-                    os.write(fd, b'\r\033[K')
-                except Exception:
-                    pass
+            try:
+                sys.stdout.write('\r\033[K')
+                sys.stdout.flush()
+            except Exception:
+                pass
 
     def _thinking_anim_loop(self):
         """Background thread: animate 'Thinking...' with pulsing dots."""
         frames = ['   ', '.  ', '.. ', '...', ' ..', '  .', '   ']
         idx = 0
         try:
-            fd = self._get_fd()
-            if fd < 0:
-                return
             while self._anim_running:
                 frame = frames[idx % len(frames)]
                 line = f'\r  \033[2mThinking{frame}\033[0m'
-                os.write(fd, line.encode('utf-8'))
+                sys.stdout.write(line)
+                sys.stdout.flush()
                 idx += 1
                 time.sleep(0.18)
         except Exception:
@@ -291,17 +298,46 @@ class StreamRenderer:
                 padding=(0, 1),
             ))
 
+    # ── Cursor Save/Restore (v7.2) ──
+
+    def _save_cursor(self):
+        """Save current cursor position for markdown re-render."""
+        try:
+            sys.stdout.write('\033[s')
+            sys.stdout.flush()
+            self._cursor_saved = True
+        except Exception:
+            pass
+
+    def _restore_and_clear(self):
+        """Restore saved cursor and clear everything below it."""
+        if self._cursor_saved:
+            try:
+                sys.stdout.write('\033[u')  # Restore cursor
+                sys.stdout.write('\033[J')  # Clear from cursor to end of screen
+                sys.stdout.flush()
+            except Exception:
+                pass
+            self._cursor_saved = False
+
     # ── Stream End ──
 
     def _end_stream(self):
         """Write final newline after streamed content."""
         if self._content_text and self._stream_started:
-            fd = self._get_fd()
-            if fd >= 0:
-                try:
-                    os.write(fd, b'\n')
-                except Exception:
-                    pass
+            try:
+                sys.stdout.write('\n')
+                sys.stdout.flush()
+            except Exception:
+                pass
+
+    # ── Round Reset (v7.2) ──
+
+    def reset_for_new_round(self):
+        """Reset streaming state for a new agent round."""
+        self._stream_started = False
+        self._cursor_saved = False
+        self._indicator_shown = False
 
     # ── Public API ──
 
@@ -321,11 +357,7 @@ class StreamRenderer:
     def append_content(self, chunk: str):
         """
         Stream content chunk DIRECTLY to terminal — REAL-TIME.
-
-        On first content chunk:
-          1. Stop thinking animation
-          2. Flush thinking panel (Rich formatted)
-          3. Start streaming content via os.write()
+        Uses buffering for smooth display (avoids flickering from too-frequent writes).
         """
         self._content_text += chunk
 
@@ -335,14 +367,91 @@ class StreamRenderer:
             self._stop_thinking_anim()
             self._flush_thinking_panel()
             console.print()  # blank line before content
+            self._save_cursor()
 
-        # Write content directly to stdout file descriptor — ZERO LATENCY
-        fd = self._get_fd()
-        if fd >= 0:
-            try:
-                os.write(fd, chunk.encode('utf-8'))
-            except Exception:
-                pass
+        # Buffer the chunk for smooth output
+        with self._buffer_lock:
+            self._write_buffer += chunk
+            now = time.monotonic()
+            # Flush at minimum interval or on newlines
+            if '\n' in chunk or (now - self._last_flush_time >= self._flush_interval):
+                self._flush_buffer()
+                self._last_flush_time = now
+
+    def _flush_buffer(self):
+        """Write buffered content to stdout."""
+        if not self._write_buffer:
+            return
+        try:
+            sys.stdout.write(self._write_buffer)
+            sys.stdout.flush()
+        except Exception:
+            pass
+        self._write_buffer = ''
+
+    def render_final(self, text: str):
+        """
+        Re-render streamed content as Rich Markdown.
+        Call ONLY on the FINAL response (no more tool rounds).
+
+        Replaces raw streamed text with beautifully formatted markdown:
+        - **bold** text, *italic* text
+        - `inline code` with syntax color
+        - Code blocks with syntax highlighting (monokai theme)
+        - Headers (# ## ###) with distinct colors
+        - Bullet/numbered lists with styled markers
+        - Blockquotes with indent and color
+        - Links with underline
+        - Tables with borders
+        - Horizontal rules
+        """
+        self._stop_thinking_anim()
+        self._flush_thinking_panel()
+        self._flush_buffer()
+
+        if not text or not text.strip():
+            self._end_stream()
+            return
+
+        # Restore cursor to start of content area, clear raw text
+        self._restore_and_clear()
+
+        # Render as Rich Markdown with syntax highlighting
+        md = Markdown(text.strip(), code_theme='monokai')
+        console.print(md)
+        console.print()
+
+    def show_thinking_as_content(self, thinking_text: str):
+        """
+        Fallback: display thinking text as content when model returned
+        reasoning-only response (no content field). Used for DeepSeek R1
+        and other reasoning models that may leave content empty.
+        """
+        self._stop_thinking_anim()
+        if thinking_text and thinking_text.strip():
+            # If thinking panel was already shown, content goes after it
+            # If thinking panel was NOT shown (thinking_visible=False), show it now
+            if not self._thinking_panel_shown and self.thinking_visible:
+                self._thinking_panel_shown = True
+                console.print()
+                console.print(Panel(
+                    thinking_text.strip(),
+                    title='reasoning (shown as response)',
+                    title_align='left',
+                    border_style='dim blue',
+                    padding=(0, 1),
+                ))
+            else:
+                # Thinking panel already shown, or thinking hidden — just output as content
+                self._content_text = thinking_text
+                self._stream_started = True
+                try:
+                    sys.stdout.write(thinking_text.strip())
+                    sys.stdout.write('\n')
+                    sys.stdout.flush()
+                except Exception:
+                    pass
+        self._end_stream()
 
     def show_error(self, message: str):
         """Display error message."""
@@ -352,145 +461,135 @@ class StreamRenderer:
         console.print(f'\n  [bold red]Error:[/bold red] {message}')
 
     def show_done(self):
-        """Finalize display — cleanup animation, flush thinking, end content."""
+        """Finalize display — cleanup animation, flush thinking, end content.
+        Used for intermediate rounds (before tool execution).
+        For final response, use render_final() instead."""
+        self._flush_buffer()
         self._stop_thinking_anim()
         self._flush_thinking_panel()
+        # Discard saved cursor for intermediate rounds (not final)
+        self._cursor_saved = False
         self._end_stream()
         sys.stdout.flush()
 
     def show_tool_call(self, tool_name: str, args: dict):
-        """Display tool call info."""
+        """Display tool call info with professional formatting."""
         self._stop_thinking_anim()
         self._flush_thinking_panel()
-        self._end_stream()
+        self._flush_buffer()
         args_str = ', '.join(f'{k}={v!r}' for k, v in args.items()) if args else ''
-        if len(args_str) > 120:
-            args_str = args_str[:117] + '...'
-        console.print(f'  [bold yellow]call[/bold yellow] {tool_name}({args_str})')
+        if len(args_str) > 100:
+            args_str = args_str[:97] + '...'
+        console.print(f'  [bold yellow]>[/bold yellow] [cyan]{tool_name}[/cyan]({args_str})')
 
     def show_tool_result(self, tool_name: str, result: str):
-        """Display tool result."""
+        """Display tool result with professional formatting."""
         display = result
         if len(display) > 800:
             display = display[:797] + '...'
         lines = display.split('\n')
         if len(lines) > 15:
             display = '\n'.join(lines[:15]) + f'\n  ... ({len(lines) - 15} more lines)'
-        console.print(f'  [dim green]result[/dim green] {display}')
+        console.print(f'  [bold green]<[/bold green] [dim]{display}[/dim] [bold green]<[/bold green]')
 
 
 # ══════════════════════════════════════
-# TOOL PROCESSING INDICATOR (v6.1.1)
+# TOOL PROCESSING INDICATOR (v6.0)
 # ══════════════════════════════════════
-# Thread-based animation using os.write() — 100% Termux compatible.
-# NO Rich Status dependency (avoids API breakage across Rich versions).
-# Shows animated spinner + cycling dots while LLM processes tool results.
-
-# ANSI color codes (no Rich dependency for the animation itself)
-_CYN = '\033[1;36m'     # bold cyan
-_DIM = '\033[2m'         # dim
-_RST = '\033[0m'        # reset
-
-# Spinner frames: rotation characters
-_SPIN_FRAMES = ['\\', '|', '/', '-']
-
-# Dot wave frames: animated ellipsis
-_DOT_FRAMES = ['   ', '.  ', '.. ', '...', ' ..', '  .']
-
 
 class ToolProcessingIndicator:
     """
-    Animated 'Processing tool results...' indicator.
+    Professional Rich-based animated indicator shown while processing tool results.
 
-    Uses a background thread + os.write() for maximum terminal compatibility
-    (works on Termux, Linux, macOS — no Rich Status needed).
-
-    The animation shows:
-      \\ Processing tool results ...  [round 1/12]
-      | Processing tool results ..   [round 1/12]
-      / Processing tool results .    [round 1/12]
-      - Processing tool results     [round 1/12]
+    Uses a Rich Status with spinner + styled message.
+    No emojis -- pure Rich formatting for maximum terminal compatibility.
 
     Usage:
-        indicator = ToolProcessingIndicator(round_num=1, max_rounds=12, tools_count=2)
-        indicator.start()
-        ... (LLM call happens here) ...
-        indicator.stop()
+        with ToolProcessingIndicator(round_num, max_rounds, tools_count):
+            ... process tools ...
     """
+
+    _SPINNER_NAMES = [
+        'dots', 'dots2', 'line', 'arc', 'arrow', 'simpleDots',
+        'simpleDotsScrolling', 'bouncingBar', 'star', 'squareCorners',
+    ]
 
     def __init__(self, round_num: int = 1, max_rounds: int = 12, tools_count: int = 0):
         self.round_num = round_num
         self.max_rounds = max_rounds
         self.tools_count = tools_count
-        self._running = False
-        self._thread = None
-        self._out_fd = -1
+        self._status = None
+        self._index = 0
 
-    def _get_fd(self):
-        """Get stdout file descriptor (cached)."""
-        if self._out_fd < 0:
-            try:
-                self._out_fd = sys.stdout.fileno()
-            except Exception:
-                self._out_fd = -1
-        return self._out_fd
+    def _spinner_name(self) -> str:
+        """Cycle through spinner styles per round for visual variety."""
+        return self._SPINNER_NAMES[self._index % len(self._SPINNER_NAMES)]
 
-    def _anim_loop(self):
-        """Background thread: spinner rotation + dot wave animation."""
-        idx = 0
-        fd = self._get_fd()
-        if fd < 0:
-            return
-
-        # Build the static part of the message
-        tool_info = ''
+    def _build_message(self) -> str:
+        """Build a professional status message."""
+        parts = []
+        parts.append(f'Processing tool results')
+        parts.append(f'[dim]round {self.round_num}/{self.max_rounds}[/dim]')
         if self.tools_count > 0:
-            tool_info = f' ({self.tools_count} tool{"s" if self.tools_count > 1 else ""})'
-
-        while self._running:
-            spin = _SPIN_FRAMES[idx % len(_SPIN_FRAMES)]
-            dots = _DOT_FRAMES[idx % len(_DOT_FRAMES)]
-            # Compose: " \ Processing tool results (2 tools) ... [round 1/12]"
-            line = (f'\r {_CYN}{spin}{_RST} Processing tool results'
-                    f'{_DIM}{tool_info}{dots}{_RST}'
-                    f'{_DIM}  [round {self.round_num}/{self.max_rounds}]{_RST}')
-            try:
-                os.write(fd, line.encode('utf-8'))
-            except Exception:
-                pass
-            idx += 1
-            time.sleep(0.1)  # 100ms per frame — smooth but not too fast
-
-    def start(self):
-        """Start the animated indicator."""
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._anim_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        """Stop the animated indicator and clear the line."""
-        was_running = self._running
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=0.5)
-            self._thread = None
-        # Clear the indicator line from terminal
-        if was_running:
-            fd = self._get_fd()
-            if fd >= 0:
-                try:
-                    os.write(fd, b'\r\033[K')  # carriage return + clear line
-                except Exception:
-                    pass
+            parts.append(f'[dim]| {self.tools_count} tool(s)[/dim]')
+        return '  '.join(parts)
 
     def __enter__(self):
-        self.start()
+        self._status = Status(
+            self._build_message(),
+            spinner=self._spinner_name(),
+            spinner_style='bold cyan',
+        )
+        self._status.start()
         return self
 
     def __exit__(self, *args):
-        self.stop()
+        if self._status:
+            self._status.stop()
+            self._status = None
+
+    def update_round(self, round_num: int, tools_count: int = 0):
+        """Update the indicator message (call while active)."""
+        self.round_num = round_num
+        self.tools_count = tools_count
+        self._index += 1
+        if self._status:
+            self._status.update(self._build_message(), spinner=self._spinner_name())
+
+
+def show_tool_processing(round_num: int = 1, max_rounds: int = 12, tools_count: int = 0) -> ToolProcessingIndicator:
+    """Convenience function: create and return a ToolProcessingIndicator."""
+    return ToolProcessingIndicator(round_num, max_rounds, tools_count)
+
+
+# ══════════════════════════════════════
+# TUI STATUS BAR (v7.7)
+# ══════════════════════════════════════
+
+class TUIStatusBar:
+    """Shows a compact status bar at the bottom of tool output."""
+
+    def __init__(self):
+        self._visible = False
+
+    def show(self, message: str):
+        """Show a status bar message."""
+        self._visible = True
+        try:
+            sys.stdout.write(f'\r  [dim cyan]{message}[/dim cyan]\033[K')
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+    def clear(self):
+        """Clear the status bar."""
+        if self._visible:
+            try:
+                sys.stdout.write('\r\033[K')
+                sys.stdout.flush()
+            except Exception:
+                pass
+            self._visible = False
 
 
 # ══════════════════════════════════════
@@ -929,12 +1028,12 @@ ________                                            __
 \______ \   ____   ____ ______  ______ ____   ____ |  | __
  |    |  \_/ __ \_/ __ \\____ \/  ___// __ \_/ __ \|  |/ /
  |    `   \  ___/\  ___/|  |_> >___ \\  ___/\  ___/|    < 
-/_______  /\___  >\___  >   __/____  >\___  >\___  >__|_ \
-        \/     \/     \/|__|       \/     \/     \/     \/ v6.1[/bold cyan]
+/_______  /\___  >\___  >   __/____  >\___  >\___  >__|_ \   [bold red]v7.0[/bold red]
+        \/     \/     \/|__|       \/     \/     \/     \/[/bold cyan]
 
-[dim]    DeepSeek CLI Agent UnOfficial v6.1[/dim]
-[dim]    Author : @xbibzofficial[/dim]
-[dim]    GitHub : github.com/@XbibzOfficial777
+[dim]    DeepSeek CLI Agent v7.0[/dim]
+[dim]    Developer : Xbibz Official[/dim]
+[dim]    Connectors : Telegram & Discord [/dim]
 """
 
 
@@ -991,10 +1090,12 @@ def show_version():
     version_table = Table(box=box.SIMPLE, show_header=False, border_style='cyan')
     version_table.add_column('Key', style='bold cyan', min_width=20)
     version_table.add_column('Value', style='white')
-    version_table.add_row('Version', 'DeepSeek CLI Agent v6.1')
-    version_table.add_row('Features', 'Multi-Provider | 7 AI Services | 67+ Tools | Real-Time Stream | Web Browser | Smart Loop | OCR')
+    version_table.add_row('Version', 'DeepSeek CLI Agent v7.7')
+    version_table.add_row('Developer', 'Xbibz Official')
+    version_table.add_row('TUI', 'Full Real-Time Stream | Rich Markdown | Smooth Buffer')
+    version_table.add_row('Features', '90+ Tools | 7 Providers | Smart Loop | OCR | Connectors')
     version_table.add_row('Providers', 'OpenRouter, Gemini, HuggingFace, OpenAI, Anthropic, Groq, Together')
-    version_table.add_row('Max Tool Rounds', '12 (smart loop)')
-    version_table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, OCR, Video, APK, Search')
+    version_table.add_row('Max Tool Rounds', '12 (smart loop with text-based fallback)')
+    version_table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, Video, Browser')
     console.print(version_table)
     console.print()

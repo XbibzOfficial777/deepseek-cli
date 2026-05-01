@@ -912,6 +912,33 @@ class ToolRegistry:
     def _get_datetime(self, args):
         tz_name = args.get("timezone", "")
         fmt = args.get("format", "")
+
+        # Auto-detect local timezone
+        local_tz_name = 'local'
+        try:
+            # Method 1: /etc/timezone
+            with open('/etc/timezone', 'r') as f:
+                detected = f.read().strip()
+                if detected:
+                    local_tz_name = detected
+        except Exception:
+            pass
+        if local_tz_name == 'local':
+            try:
+                tz_env = os.environ.get('TZ', '')
+                if tz_env:
+                    local_tz_name = tz_env
+            except Exception:
+                pass
+        if local_tz_name == 'local':
+            try:
+                if os.path.exists('/etc/localtime'):
+                    target = os.path.realpath('/etc/localtime')
+                    if 'zoneinfo/' in target:
+                        local_tz_name = target.split('zoneinfo/')[-1]
+            except Exception:
+                pass
+
         now = datetime.now()
         try:
             if tz_name:
@@ -919,11 +946,17 @@ class ToolRegistry:
                 now = now.astimezone(ZoneInfo(tz_name))
                 tz_display = tz_name
             else:
-                tz_display = "local"
+                # Use detected local timezone for proper display
+                try:
+                    from zoneinfo import ZoneInfo
+                    now = now.astimezone(ZoneInfo(local_tz_name))
+                    tz_display = local_tz_name
+                except Exception:
+                    tz_display = local_tz_name
         except ImportError:
-            tz_display = "local"
+            tz_display = local_tz_name
         except Exception:
-            tz_display = "local"
+            tz_display = local_tz_name
 
         if fmt:
             return now.strftime(fmt)

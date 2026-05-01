@@ -136,7 +136,6 @@ MISSING=""
 $PYTHON -c "import httpx" 2>/dev/null || MISSING="$MISSING httpx"
 $PYTHON -c "import rich" 2>/dev/null || MISSING="$MISSING rich"
 $PYTHON -c "import yaml" 2>/dev/null || MISSING="$MISSING pyyaml"
-$PYTHON -c "from ddgs import DDGS" 2>/dev/null || { $PYTHON -c "from duckduckgo_search import DDGS" 2>/dev/null || MISSING="$MISSING ddgs"; }
 $PYTHON -c "import PyPDF2" 2>/dev/null || MISSING="$MISSING PyPDF2"
 $PYTHON -c "import reportlab" 2>/dev/null || MISSING="$MISSING reportlab"
 $PYTHON -c "import docx" 2>/dev/null || MISSING="$MISSING python-docx"
@@ -161,11 +160,11 @@ fi
 
 # Verify core deps
 DEPS_OK=true
-$PYTHON -c "import httpx; import rich; import yaml; from ddgs import DDGS" 2>/dev/null || $PYTHON -c "import httpx; import rich; import yaml; from duckduckgo_search import DDGS" 2>/dev/null || DEPS_OK=false
+$PYTHON -c "import httpx; import rich; import yaml" 2>/dev/null || DEPS_OK=false
 
 if ! $DEPS_OK; then
     err "Failed to install core dependencies. Try manually:"
-    echo -e "${D}  $PYTHON -m pip install httpx rich pyyaml ddgs${R}"
+    echo -e "${D}  $PYTHON -m pip install httpx rich pyyaml${R}"
     exit 1
 fi
 
@@ -176,12 +175,16 @@ $PYTHON -c "import reportlab" 2>/dev/null || OPT_MISSING="$OPT_MISSING reportlab
 $PYTHON -c "import docx" 2>/dev/null || OPT_MISSING="$OPT_MISSING python-docx"
 $PYTHON -c "from PIL import Image" 2>/dev/null || OPT_MISSING="$OPT_MISSING Pillow"
 $PYTHON -c "import bs4" 2>/dev/null || OPT_MISSING="$OPT_MISSING beautifulsoup4"
+$PYTHON -c "import lxml" 2>/dev/null || OPT_MISSING="$OPT_MISSING lxml"
 $PYTHON -c "import mcp" 2>/dev/null || OPT_MISSING="$OPT_MISSING mcp"
+$PYTHON -c "import pydantic" 2>/dev/null || OPT_MISSING="$OPT_MISSING pydantic"
+$PYTHON -c "import pytesseract" 2>/dev/null || OPT_MISSING="$OPT_MISSING pytesseract"
+$PYTHON -c "import selenium" 2>/dev/null || OPT_MISSING="$OPT_MISSING selenium"
 
 if [ -n "$OPT_MISSING" ]; then
     warn "Optional tools missing:${OPT_MISSING}"
-    echo -e "${D}  Install manually:  $PYTHON -m pip install PyPDF2 reportlab python-docx Pillow${R}"
-    warn "PDF/DOCX/Image tools will be limited without these"
+    echo -e "${D}  Install manually:  $PYTHON -m pip install PyPDF2 reportlab python-docx Pillow lxml mcp pydantic pytesseract selenium${R}"
+    warn "Some tools will be limited without these"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -347,7 +350,7 @@ WRAPPER_EOF
 sed -i "s|__INSTALL_DIR_PLACEHOLDER__|$INSTALL_DIR|g" "$WRAPPER"
 chmod +x "$WRAPPER"
 
-# Ensure BIN_DIR is in PATH
+# Ensure BIN_DIR is in PATH — inject into BOTH .bashrc AND .zshrc
 PATH_NEED_FIX=false
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
@@ -355,33 +358,63 @@ case ":$PATH:" in
 esac
 
 if $PATH_NEED_FIX; then
-    SHELL_RC=""
-    if [ -n "${ZSH_VERSION:-}" ] && [ -f "$HOME/.zshrc" ]; then
-        SHELL_RC="$HOME/.zshrc"
-    elif [ -n "${BASH_VERSION:-}" ]; then
-        if [ -f "$HOME/.bashrc" ]; then
-            SHELL_RC="$HOME/.bashrc"
-        elif $IS_TERMUX && [ -f "$HOME/.bashrc" ]; then
-            SHELL_RC="$HOME/.bashrc"
-        fi
-    fi
+    # Track which files were modified
+    _PATH_INJECTED_BASHRC=false
+    _PATH_INJECTED_ZSHRC=false
 
-    if [ -f "$HOME/.bashrc" ] && [ -z "$SHELL_RC" ]; then
-        SHELL_RC="$HOME/.bashrc"
-    fi
-
-    if [ -n "$SHELL_RC" ] && [ -f "$SHELL_RC" ]; then
-        if ! grep -q "deepseek-cli" "$SHELL_RC" 2>/dev/null; then
-            echo "" >> "$SHELL_RC"
-            echo "# DeepSeek CLI" >> "$SHELL_RC"
-            echo 'export PATH="__BIN_DIR__:$PATH"' >> "$SHELL_RC"
-            sed -i "s|__BIN_DIR__|$BIN_DIR|g" "$SHELL_RC"
-            info "Added to PATH in $SHELL_RC"
+    # --- Inject into .bashrc ---
+    if [ -f "$HOME/.bashrc" ]; then
+        if ! grep -q "deepseek-cli" "$HOME/.bashrc" 2>/dev/null; then
+            echo "" >> "$HOME/.bashrc"
+            echo "# DeepSeek CLI - Auto-added by installer" >> "$HOME/.bashrc"
+            echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.bashrc"
+            _PATH_INJECTED_BASHRC=true
+            info "Added to PATH in ~/.bashrc"
         fi
-        export PATH="$BIN_DIR:$PATH"
+    elif [ -f "$HOME/.bash_profile" ]; then
+        if ! grep -q "deepseek-cli" "$HOME/.bash_profile" 2>/dev/null; then
+            echo "" >> "$HOME/.bash_profile"
+            echo "# DeepSeek CLI - Auto-added by installer" >> "$HOME/.bash_profile"
+            echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.bash_profile"
+            _PATH_INJECTED_BASHRC=true
+            info "Added to PATH in ~/.bash_profile (no .bashrc)"
+        fi
     else
-        export PATH="$BIN_DIR:$PATH"
+        # Create .bashrc with the PATH entry
+        echo "# DeepSeek CLI - Auto-added by installer" > "$HOME/.bashrc"
+        echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.bashrc"
+        _PATH_INJECTED_BASHRC=true
+        info "Created ~/.bashrc with PATH entry"
     fi
+
+    # --- Inject into .zshrc ---
+    if [ -f "$HOME/.zshrc" ]; then
+        if ! grep -q "deepseek-cli" "$HOME/.zshrc" 2>/dev/null; then
+            echo "" >> "$HOME/.zshrc"
+            echo "# DeepSeek CLI - Auto-added by installer" >> "$HOME/.zshrc"
+            echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.zshrc"
+            _PATH_INJECTED_ZSHRC=true
+            info "Added to PATH in ~/.zshrc"
+        fi
+    else
+        # Create .zshrc with the PATH entry
+        echo "# DeepSeek CLI - Auto-added by installer" > "$HOME/.zshrc"
+        echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.zshrc"
+        _PATH_INJECTED_ZSHRC=true
+        info "Created ~/.zshrc with PATH entry"
+    fi
+
+    # Export for current session
+    export PATH="$BIN_DIR:$PATH"
+    info "PATH exported for current session"
+fi
+
+# Always source the config for immediate availability
+if [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc" 2>/dev/null || true
+fi
+if [ -f "$HOME/.zshrc" ]; then
+    . "$HOME/.zshrc" 2>/dev/null || true
 fi
 
 if command -v dscli &>/dev/null; then

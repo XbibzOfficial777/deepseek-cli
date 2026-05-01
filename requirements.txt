@@ -1,14 +1,23 @@
+# DeepSeek CLI v7.7 — Python Dependencies
+# Core (required):
 httpx
 rich
-ddgs
 pyyaml
+pydantic
+# Documents:
 PyPDF2
 reportlab
 python-docx
+# Images & OCR:
 Pillow
+pytesseract
+# Web scraping:
 beautifulsoup4
 lxml
+# Browser automation:
+selenium
+webdriver-manager
+# MCP (Model Context Protocol):
 mcp
-pydantic
-pytesseract
-easyocr
+# Optional (OCR fallback - install manually if needed):
+# easyocr

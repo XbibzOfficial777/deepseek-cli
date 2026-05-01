@@ -17,10 +17,27 @@ from .agent import Agent
 from .ui import (console, show_banner, show_welcome, show_help,
                  show_version, with_spinner, interactive_select,
                  prompt_input, CTRL_P_SENTINEL)
+from .connectors import connectors as connector_manager
 
-VERSION = '6.1'
-VERSION_BANNER = 'DeepSeek CLI Agent v6.1'
-VERSION_FEATURES = 'Multi-Provider | 7 AI Services | 67+ Tools | Real-Time Stream | Web Browser | Smart Loop | OCR'
+
+def _flush_stdin_safe():
+    """Flush any pending bytes from stdin to prevent leftover data after interactive_select."""
+    try:
+        import select as _sel
+        import os as _os
+        fd = sys.stdin.fileno()
+        while True:
+            ready, _, _ = _sel.select([fd], [], [], 0.0)
+            if not ready:
+                break
+            _os.read(fd, 4096)
+    except Exception:
+        pass
+
+
+VERSION = '7.7'
+VERSION_BANNER = 'DeepSeek CLI Agent v7.7'
+VERSION_FEATURES = 'Multi-Provider | 7 AI Services | 80+ Tools | Real-Time Stream | Rich Markdown | Web Browser | Smart Loop | OCR | Telegram & Discord | Auth Automation'
 
 
 def main():
@@ -39,6 +56,9 @@ def main():
 
     provider = create_provider(provider_id, provider_config, api_key)
     agent = Agent(memory, tools, provider, model, thinking_visible=True)
+
+    # Initialize connectors
+    _init_connectors(agent, memory)
 
     # Welcome
     show_welcome(provider.name, model, bool(api_key))
@@ -96,7 +116,8 @@ def main():
             console.print(f'\n  [bold red]Error:[/bold red] {e}')
             console.print()
 
-
+    # Cleanup connectors on exit
+    connector_manager.stop_all()
 
 
 
@@ -202,6 +223,24 @@ def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) 
         console.print(f'  [green]Conversation compacted (system + last 10).[/green]')
         console.print()
 
+    # ── /connectors ─────────────────────
+    elif command == '/connectors':
+        show_connectors_status()
+
+    # ── /telegram ───────────────────────
+    elif command == '/telegram':
+        if args:
+            _do_telegram(args)
+        else:
+            telegram_menu()
+
+    # ── /discord ────────────────────────
+    elif command == '/discord':
+        if args:
+            _do_discord(args)
+        else:
+            discord_menu()
+
     else:
         console.print(f'  [yellow]Unknown command: {command}[/yellow]')
         console.print(f'  [dim]Type /help for available commands.[/dim]')
@@ -229,11 +268,21 @@ def open_settings_panel(agent, memory):
         key_display = mask_key(cfg.get_api_key(pid))
 
         # Build settings menu items
+        tg_running = connector_manager.telegram.is_running if connector_manager.telegram else False
+        dc_running = connector_manager.discord.is_running if connector_manager.discord else False
+        connector_status = []
+        if tg_running:
+            connector_status.append('TG:ON')
+        if dc_running:
+            connector_status.append('DC:ON')
+        conn_label = ' '.join(connector_status) if connector_status else 'OFF'
+
         items = [
             f'Provider     {pconfig.get("name", pid)}',
             f'Model        {model}',
             f'API Key      {key_display if has_key else "(not set)"}',
             f'Thinking     {"ON" if thinking else "OFF"}',
+            f'Connectors   {conn_label}',
             'System Prompt  Edit system prompt',
             'Config Info    Show configuration',
             'Clear Chat     Clear conversation',
@@ -263,16 +312,21 @@ def open_settings_panel(agent, memory):
             toggle_thinking(agent)
 
         elif idx == 4:
+            # Connectors — full interactive sub-menu
+            console.print()
+            _settings_connectors()
+
+        elif idx == 5:
             # Edit system prompt
             console.print()
             _settings_edit_system(memory)
 
-        elif idx == 5:
+        elif idx == 6:
             # Show info
             console.print()
             show_info(agent, memory)
 
-        elif idx == 6:
+        elif idx == 7:
             # Clear conversation
             memory.clear()
             console.print('  [green]Conversation cleared.[/green]')
@@ -340,6 +394,133 @@ def _settings_switch_model(agent):
         _do_switch_model(agent, popular[idx])
 
 
+def _settings_connectors():
+    """Full interactive Connectors sub-menu from settings panel (Ctrl+P)."""
+    while True:
+        # Build dynamic status labels
+        tg_cfg = bool(cfg.get_connector_token('telegram'))
+        tg_run = connector_manager.telegram.is_running if connector_manager.telegram else False
+        dc_cfg = bool(cfg.get_connector_token('discord'))
+        dc_run = connector_manager.discord.is_running if connector_manager.discord else False
+
+        tg_state = 'RUNNING' if tg_run else 'Stopped'
+        tg_cfg_s = 'SET' if tg_cfg else 'Not set'
+        dc_state = 'RUNNING' if dc_run else 'Stopped'
+        dc_cfg_s = 'SET' if dc_cfg else 'Not set'
+        tg_label = f'Telegram     {tg_state}  ({tg_cfg_s})'
+        dc_label = f'Discord      {dc_state}  ({dc_cfg_s})'
+
+        items = [
+            tg_label,
+            dc_label,
+            'Back to Settings',
+        ]
+        idx = interactive_select(items, title='-- Connectors --', active_index=0)
+
+        if idx == -1 or idx == 2:
+            # Esc or Back — return to settings
+            break
+        elif idx == 0:
+            # Telegram sub-menu
+            _settings_telegram_menu()
+        elif idx == 1:
+            # Discord sub-menu
+            _settings_discord_menu()
+
+
+def _settings_telegram_menu():
+    """Interactive Telegram setup sub-menu."""
+    while True:
+        is_configured = bool(cfg.get_connector_token('telegram'))
+        is_running = connector_manager.telegram.is_running if connector_manager.telegram else False
+        run_s = 'RUNNING' if is_running else 'Stopped'
+        cfg_s = 'Token set' if is_configured else 'No token'
+        state = f'{run_s}  ({cfg_s})'
+
+        items = [
+            f'Status: {state}',
+            'Start Bot',
+            'Stop Bot',
+            'Setup / Change Token',
+            'Set Allowed Users',
+            'Remove Token',
+            'Back',
+        ]
+        idx = interactive_select(items, title='-- Telegram Setup --', active_index=0)
+
+        if idx == -1 or idx == 6:
+            break
+        elif idx == 0:
+            show_connectors_status()
+        elif idx == 1:
+            _do_telegram('start')
+        elif idx == 2:
+            _do_telegram('stop')
+        elif idx == 3:
+            _do_telegram('setup')
+            console.print()
+        elif idx == 4:
+            _do_telegram('allow')
+        elif idx == 5:
+            # Remove token
+            cfg.set_connector_config('telegram', 'token', '')
+            cfg.set_connector_config('telegram', 'auto_start', False)
+            if connector_manager.telegram:
+                if connector_manager.telegram.is_running:
+                    connector_manager.stop_telegram()
+                connector_manager.telegram = None
+            console.print('  [green]Telegram token removed.[/green]')
+            console.print()
+
+
+def _settings_discord_menu():
+    """Interactive Discord setup sub-menu."""
+    while True:
+        dc_token = cfg.get_connector_token('discord')
+        dc_channel = cfg.get_connector_config('discord').get('channel_id', '')
+        is_configured = bool(dc_token and dc_channel)
+        is_running = connector_manager.discord.is_running if connector_manager.discord else False
+        run_s = 'RUNNING' if is_running else 'Stopped'
+        cfg_s = 'Set' if is_configured else 'Not set'
+        state = f'{run_s}  ({cfg_s})'
+
+        items = [
+            f'Status: {state}',
+            'Start Bot',
+            'Stop Bot',
+            'Setup / Change Token & Channel',
+            'Set Allowed Users',
+            'Remove Config',
+            'Back',
+        ]
+        idx = interactive_select(items, title='-- Discord Setup --', active_index=0)
+
+        if idx == -1 or idx == 6:
+            break
+        elif idx == 0:
+            show_connectors_status()
+        elif idx == 1:
+            _do_discord('start')
+        elif idx == 2:
+            _do_discord('stop')
+        elif idx == 3:
+            _do_discord('setup')
+            console.print()
+        elif idx == 4:
+            _do_discord('allow')
+        elif idx == 5:
+            # Remove config
+            cfg.set_connector_config('discord', 'token', '')
+            cfg.set_connector_config('discord', 'channel_id', '')
+            cfg.set_connector_config('discord', 'auto_start', False)
+            if connector_manager.discord:
+                if connector_manager.discord.is_running:
+                    connector_manager.stop_discord()
+                connector_manager.discord = None
+            console.print('  [green]Discord config removed.[/green]')
+            console.print()
+
+
 def _settings_edit_system(memory):
     """Edit system prompt from settings panel."""
     console.print(f'  [dim]Current system prompt:[/dim]')
@@ -371,13 +552,15 @@ def show_version_info():
     table.add_column('Key', style='bold cyan', min_width=20)
     table.add_column('Value', style='white')
     table.add_row('Version', VERSION_BANNER)
+    table.add_row('Developer', 'Xbibz Official')
     table.add_row('Features', VERSION_FEATURES)
     table.add_row('Providers', 'OpenRouter, Gemini, HuggingFace, OpenAI, Anthropic, Groq, Together')
     table.add_row('Max Tool Rounds', f'{MAX_TOOL_ROUNDS} (smart loop)')
     table.add_row('Loop Detection', f'max_same_tool={3}, anti_stuck=ON')
     table.add_row('Validation', 'Pydantic (with fallback)')
     table.add_row('Logging', '~/.deepseek-cli/logs/')
-    table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, Video, APK, OCR, Live Search, Browser')
+    table.add_row('Tool Categories', 'File, Web, Code, System, Math, Utility, PDF, DOCX, Image, Video, APK, OCR, Live Search, Browser, Connectors')
+    table.add_row('Response Style', 'Rich Markdown (bold, italic, code, syntax highlight)')
     console.print(table)
     console.print()
 
@@ -869,6 +1052,332 @@ def _do_live_model_select(agent: Agent):
 # ══════════════════════════════════════
 # ENTRY POINT
 # ══════════════════════════════════════
+
+# ══════════════════════════════════════
+# CONNECTOR COMMANDS (Telegram & Discord)
+# ══════════════════════════════════════
+
+def _init_connectors(agent, memory):
+    """Initialize connector manager with agent callback."""
+    def agent_callback(message, source='cli', user='User'):
+        """Bridge: connector message -> agent.chat()"""
+        try:
+            result = agent.chat(message)
+            return result.get('content', '(No response)')
+        except Exception as e:
+            return f'Agent error: {e}'
+
+    connector_manager.set_agent_callback(agent_callback)
+    connector_manager.set_agent_memory(memory)
+
+    # Auto-restore from config
+    tg_token = cfg.get_connector_token('telegram')
+    dc_token = cfg.get_connector_token('discord')
+    dc_channel = cfg.get_connector_config('discord').get('channel_id', '')
+
+    if tg_token:
+        allowed = cfg.get_connector_config('telegram').get('allowed_users', None)
+        if allowed and isinstance(allowed, str):
+            try:
+                allowed = [int(x.strip()) for x in allowed.split(',')]
+            except Exception:
+                allowed = None
+        connector_manager.configure_telegram(tg_token, allowed_users=allowed)
+
+    if dc_token and dc_channel:
+        allowed = cfg.get_connector_config('discord').get('allowed_users', None)
+        if allowed and isinstance(allowed, str):
+            try:
+                allowed = [x.strip() for x in allowed.split(',')]
+            except Exception:
+                allowed = None
+        connector_manager.configure_discord(dc_token, dc_channel, allowed_users=allowed)
+
+    # Auto-start connectors that were previously configured
+    tg_auto = cfg.get_connector_config('telegram').get('auto_start', False)
+    dc_auto = cfg.get_connector_config('discord').get('auto_start', False)
+    if tg_token and tg_auto:
+        connector_manager.start_telegram()
+    if dc_token and dc_channel and dc_auto:
+        connector_manager.start_discord()
+
+
+def show_connectors_status():
+    """Show status of all connectors."""
+    status = connector_manager.get_status()
+
+    table = Table(box=box.ROUNDED, show_header=False,
+                  border_style='cyan', title='Connectors Status')
+    table.add_column('Platform', style='bold cyan', min_width=12)
+    table.add_column('Status', style='white')
+
+    # Telegram
+    tg = status.get('telegram', {})
+    tg_state = '[green]RUNNING[/green]' if tg.get('running') else '[dim]Stopped[/dim]'
+    tg_config = '[green]Configured[/green]' if tg.get('configured') else '[dim]Not set[/dim]'
+    table.add_row('Telegram', f'{tg_state} | {tg_config} | {tg.get("status", "")}')
+
+    # Discord
+    dc = status.get('discord', {})
+    dc_state = '[green]RUNNING[/green]' if dc.get('running') else '[dim]Stopped[/dim]'
+    dc_config = '[green]Configured[/green]' if dc.get('configured') else '[dim]Not set[/dim]'
+    table.add_row('Discord', f'{dc_state} | {dc_config} | {dc.get("status", "")}')
+
+    console.print(table)
+    console.print()
+    console.print('  [dim]Commands: /telegram, /discord[/dim]')
+    console.print('  [dim]Usage: /telegram start|stop|setup[/dim]')
+    console.print()
+
+
+def telegram_menu():
+    """Interactive Telegram menu."""
+    items = [
+        'Start Bot',
+        'Stop Bot',
+        'Setup Token',
+        'Set Allowed Users',
+        'Status',
+    ]
+    idx = interactive_select(items, title='-- Telegram Bot --', active_index=0)
+    if idx == 0:
+        _do_telegram('start')
+    elif idx == 1:
+        _do_telegram('stop')
+    elif idx == 2:
+        _do_telegram('setup')
+    elif idx == 3:
+        _do_telegram('allow')
+    elif idx == 4:
+        show_connectors_status()
+    else:
+        console.print('  [dim]Cancelled.[/dim]')
+        console.print()
+
+
+def _do_telegram(action: str):
+    """Execute Telegram action."""
+    action = action.lower().strip()
+
+    if action == 'start':
+        ok, msg = connector_manager.start_telegram()
+        if ok:
+            console.print(f'  [green]{msg}[/green]')
+        else:
+            console.print(f'  [yellow]{msg}[/yellow]')
+            if 'not configured' in msg:
+                console.print(f'  [dim]Use /telegram setup to configure.[/dim]')
+        console.print()
+
+    elif action == 'stop':
+        ok, msg = connector_manager.stop_telegram()
+        console.print(f'  [green]{msg}[/green]')
+        console.print()
+
+    elif action == 'setup':
+        console.print(f'  [cyan]Telegram Bot Setup[/cyan]')
+        console.print(f'  [dim]Get a bot token from @BotFather on Telegram.[/dim]')
+        console.print()
+
+        _flush_stdin_safe()
+        try:
+            token = console.input('  [bold]Bot token:[/bold] ').strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print('\n  [dim]Cancelled.[/dim]')
+            return
+
+        if not token:
+            console.print('  [dim]No token entered.[/dim]')
+            return
+
+        cfg.set_connector_token('telegram', token)
+        # Preserve allowed_users from existing config
+        allowed = cfg.get_connector_config('telegram').get('allowed_users', None)
+        if allowed and isinstance(allowed, str):
+            try:
+                allowed = [int(x.strip()) for x in allowed.split(',')]
+            except Exception:
+                allowed = None
+        connector_manager.configure_telegram(token, allowed_users=allowed)
+        console.print()
+
+        # Validate
+        with with_spinner('Validating token...'):
+            ok, info = connector_manager.telegram.validate_token()
+
+        if ok:
+            console.print(f'  [green]Token valid! Bot: {info}[/green]')
+            _flush_stdin_safe()
+            try:
+                auto = console.input('  [bold]Start bot now? (y/N):[/bold] ').strip().lower()
+                if auto == 'y' or auto == 'yes':
+                    ok2, msg2 = connector_manager.start_telegram()
+                    console.print(f'  {"[green]" if ok2 else "[yellow]"}{msg2}{"[/green]" if ok2 else "[/yellow]"}')
+                    if ok2:
+                        cfg.set_connector_config('telegram', 'auto_start', True)
+            except (KeyboardInterrupt, EOFError):
+                pass
+        else:
+            console.print(f'  [red]Invalid token: {info}[/red]')
+        console.print()
+
+    elif action == 'allow':
+        console.print(f'  [cyan]Set Allowed Users[/cyan]')
+        console.print(f'  [dim]Enter Telegram user IDs (comma separated). Leave empty to allow all.[/dim]')
+        _flush_stdin_safe()
+        try:
+            users_input = console.input('  [bold]User IDs:[/bold] ').strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print('\n  [dim]Cancelled.[/dim]')
+            return
+
+        if users_input:
+            try:
+                user_ids = [int(x.strip()) for x in users_input.split(',')]
+                cfg.set_connector_config('telegram', 'allowed_users', users_input)
+                if connector_manager.telegram:
+                    connector_manager.telegram.allowed_users = user_ids
+                console.print(f'  [green]Allowed users set: {user_ids}[/green]')
+            except ValueError:
+                console.print(f'  [red]Invalid user IDs. Use comma-separated numbers.[/red]')
+        else:
+            cfg.set_connector_config('telegram', 'allowed_users', '')
+            if connector_manager.telegram:
+                connector_manager.telegram.allowed_users = None
+            console.print(f'  [green]All users allowed (whitelist disabled).[/green]')
+        console.print()
+
+    else:
+        console.print(f'  [yellow]Unknown action: {action}[/yellow]')
+        console.print(f'  [dim]Use: start, stop, setup, allow[/dim]')
+        console.print()
+
+
+def discord_menu():
+    """Interactive Discord menu."""
+    items = [
+        'Start Bot',
+        'Stop Bot',
+        'Setup Token & Channel',
+        'Set Allowed Users',
+        'Status',
+    ]
+    idx = interactive_select(items, title='-- Discord Bot --', active_index=0)
+    if idx == 0:
+        _do_discord('start')
+    elif idx == 1:
+        _do_discord('stop')
+    elif idx == 2:
+        _do_discord('setup')
+    elif idx == 3:
+        _do_discord('allow')
+    elif idx == 4:
+        show_connectors_status()
+    else:
+        console.print('  [dim]Cancelled.[/dim]')
+        console.print()
+
+
+def _do_discord(action: str):
+    """Execute Discord action."""
+    action = action.lower().strip()
+
+    if action == 'start':
+        ok, msg = connector_manager.start_discord()
+        if ok:
+            console.print(f'  [green]{msg}[/green]')
+        else:
+            console.print(f'  [yellow]{msg}[/yellow]')
+            if 'not configured' in msg:
+                console.print(f'  [dim]Use /discord setup to configure.[/dim]')
+        console.print()
+
+    elif action == 'stop':
+        ok, msg = connector_manager.stop_discord()
+        console.print(f'  [green]{msg}[/green]')
+        console.print()
+
+    elif action == 'setup':
+        console.print(f'  [cyan]Discord Bot Setup[/cyan]')
+        console.print(f'  [dim]Get a bot token from Discord Developer Portal.[/dim]')
+        console.print(f'  [dim]Channel ID: Right-click channel -> Copy ID (enable Developer Mode first).[/dim]')
+        console.print()
+
+        _flush_stdin_safe()
+        try:
+            token = console.input('  [bold]Bot token:[/bold] ').strip()
+            if not token:
+                console.print('  [dim]No token entered.[/dim]')
+                return
+            _flush_stdin_safe()
+            channel_id = console.input('  [bold]Channel ID:[/bold] ').strip()
+            if not channel_id:
+                console.print('  [dim]No channel ID entered.[/dim]')
+                return
+        except (KeyboardInterrupt, EOFError):
+            console.print('\n  [dim]Cancelled.[/dim]')
+            return
+
+        cfg.set_connector_token('discord', token)
+        cfg.set_connector_config('discord', 'channel_id', channel_id)
+        # Preserve allowed_users from existing config
+        allowed = cfg.get_connector_config('discord').get('allowed_users', None)
+        if allowed and isinstance(allowed, str):
+            try:
+                allowed = [x.strip() for x in allowed.split(',')]
+            except Exception:
+                allowed = None
+        connector_manager.configure_discord(token, channel_id, allowed_users=allowed)
+        console.print()
+
+        # Validate
+        with with_spinner('Validating token...'):
+            ok, info = connector_manager.discord.validate_token()
+
+        if ok:
+            console.print(f'  [green]Token valid! Bot: {info}[/green]')
+            _flush_stdin_safe()
+            try:
+                auto = console.input('  [bold]Start bot now? (y/N):[/bold] ').strip().lower()
+                if auto == 'y' or auto == 'yes':
+                    ok2, msg2 = connector_manager.start_discord()
+                    console.print(f'  {"[green]" if ok2 else "[yellow]"}{msg2}{"[/green]" if ok2 else "[/yellow]"}')
+                    if ok2:
+                        cfg.set_connector_config('discord', 'auto_start', True)
+            except (KeyboardInterrupt, EOFError):
+                pass
+        else:
+            console.print(f'  [red]Invalid token: {info}[/red]')
+        console.print()
+
+    elif action == 'allow':
+        console.print(f'  [cyan]Set Allowed Users[/cyan]')
+        console.print(f'  [dim]Enter Discord user IDs (comma separated). Leave empty to allow all.[/dim]')
+        _flush_stdin_safe()
+        try:
+            users_input = console.input('  [bold]User IDs:[/bold] ').strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print('\n  [dim]Cancelled.[/dim]')
+            return
+
+        if users_input:
+            user_ids = [x.strip() for x in users_input.split(',')]
+            cfg.set_connector_config('discord', 'allowed_users', users_input)
+            if connector_manager.discord:
+                connector_manager.discord.allowed_users = user_ids
+            console.print(f'  [green]Allowed users set: {user_ids}[/green]')
+        else:
+            cfg.set_connector_config('discord', 'allowed_users', '')
+            if connector_manager.discord:
+                connector_manager.discord.allowed_users = None
+            console.print(f'  [green]All users allowed (whitelist disabled).[/green]')
+        console.print()
+
+    else:
+        console.print(f'  [yellow]Unknown action: {action}[/yellow]')
+        console.print(f'  [dim]Use: start, stop, setup, allow[/dim]')
+        console.print()
+
 
 if __name__ == '__main__':
     main()
