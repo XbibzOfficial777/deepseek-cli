@@ -63,42 +63,58 @@ if $UNINSTALL_MODE; then
     echo -e "${YE}${B}  ╚══════════════════════════════════════════╝${R}"
     echo ""
 
-    # Detect install dirs
-    PKG_DIRS=(
-        "$HOME/.local/lib/deepseek-cli"
-        "$HOME/.deepseek-cli"
-    )
-    BIN_PATH=""
-    for d in /usr/local/bin "$HOME/.local/bin" "${PREFIX:-/data/data/com.termux/files/usr}/bin"; do
-        if [ -f "$d/dscli" ]; then
-            BIN_PATH="$d/dscli"
-            break
-        fi
-    done
-
     FOUND=false
+    DEEPSEEK_CONFIG="$HOME/.deepseek-cli"
 
-    # Remove package dirs
-    for d in "${PKG_DIRS[@]}"; do
-        if [ -d "$d/deepseek" ] || [ -d "$d" ]; then
-            echo -e "  ${CY}▸${R} Removing: ${D}$d${R}"
-            rm -rf "$d/deepseek" 2>/dev/null || true
+    # 1. Remove package directories
+    for d in "$HOME/.local/lib/deepseek-cli" "$DEEPSEEK_CONFIG"; do
+        if [ -d "$d" ]; then
+            echo -e "  ${CY}▸${R} Removing package: ${D}$d${R}"
             rm -rf "$d" 2>/dev/null || true
             FOUND=true
         fi
     done
 
-    # Remove wrapper
-    if [ -n "$BIN_PATH" ] && [ -f "$BIN_PATH" ]; then
-        echo -e "  ${CY}▸${R} Removing: ${D}$BIN_PATH${R}"
-        rm -f "$BIN_PATH"
+    # 2. Remove dscli wrapper binary
+    for d in /usr/local/bin "$HOME/.local/bin" "${PREFIX:-/data/data/com.termux/files/usr}/bin"; do
+        if [ -f "$d/dscli" ]; then
+            echo -e "  ${CY}▸${R} Removing wrapper: ${D}$d/dscli${R}"
+            rm -f "$d/dscli"
+            FOUND=true
+        fi
+    done
+
+    # 3. Remove logs
+    if [ -d "$HOME/.deepseek-cli/logs" ]; then
+        echo -e "  ${CY}▸${R} Removing logs: ${D}$HOME/.deepseek-cli/logs${R}"
+        rm -rf "$HOME/.deepseek-cli/logs"
         FOUND=true
     fi
 
-    # Remove from PATH in bashrc/zshrc
+    # 4. Remove legacy key file
+    if [ -f "$HOME/.deepseek_api_key" ]; then
+        echo -e "  ${CY}▸${R} Removing legacy key file${R}"
+        rm -f "$HOME/.deepseek_api_key"
+        FOUND=true
+    fi
+
+    # 5. Remove all ~/.deepseek-cli/ contents EXCEPT config.yaml (API key)
+    if [ -d "$DEEPSEEK_CONFIG" ]; then
+        echo -e "  ${CY}▸${R} Cleaning: ${D}$DEEPSEEK_CONFIG (keeping config.yaml with API key)${R}"
+        for item in "$DEEPSEEK_CONFIG"/*; do
+            [ -e "$item" ] || break
+            basename_item="$(basename "$item")"
+            if [ "$basename_item" != "config.yaml" ]; then
+                rm -rf "$item"
+            fi
+        done
+        FOUND=true
+    fi
+
+    # 6. Clean PATH entries from shell configs
     for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"; do
         if [ -f "$rc" ]; then
-            if grep -q "deepseek-cli" "$rc" 2>/dev/null; then
+            if grep -q "deepseek-cli\|dscli" "$rc" 2>/dev/null; then
                 echo -e "  ${CY}▸${R} Cleaning PATH in: ${D}$rc${R}"
                 sed -i '/# DeepSeek CLI/d' "$rc"
                 sed -i '/deepseek-cli/d' "$rc"
@@ -107,22 +123,13 @@ if $UNINSTALL_MODE; then
         fi
     done
 
-    # Remove config (with confirmation)
-    if [ -d "$HOME/.deepseek-cli" ]; then
-        echo ""
-        echo -en "  ${YE}Remove config directory ~/.deepseek-cli? [y/N]${R} "
-        read -r ANS </dev/tty 2>/dev/null || ANS="n"
-        if [ "$ANS" = "y" ] || [ "$ANS" = "Y" ]; then
-            rm -rf "$HOME/.deepseek-cli"
-            echo -e "  ${GR}✓${R} ${D}Config removed${R}"
-        else
-            echo -e "  ${CY}▸${R} ${D}Config kept at ~/.deepseek-cli${R}"
-        fi
-    fi
+    # 7. Remove any stray cache/history files
+    rm -f "$HOME/.deepseek-cli-history" 2>/dev/null || true
 
     echo ""
     if $FOUND; then
         echo -e "  ${GR}${B}✓ DeepSeek CLI has been uninstalled.${R}"
+        echo -e "  ${GR}${B}✓ API key kept in ${D}$DEEPSEEK_CONFIG/config.yaml${R}"
     else
         echo -e "  ${YE}DeepSeek CLI is not installed or already removed.${R}"
     fi
