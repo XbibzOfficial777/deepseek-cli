@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  DeepSeek CLI v7.7 — Installer
+#  DeepSeek CLI v7.7 — Installer / Uninstaller
 #  Multi-Provider AI Agent | 7 Providers | 90+ Tools | Smart Loop | OCR
 #  Features: Live Search, Browser Automation, Telegram & Discord Connectors
 #  Document Tools (PPTX/XLSX/DOCX/CSV/PDF), Selenium, Rich Markdown UI
 #
-#  Install methods:
-#    1) bash install.sh                      (from downloaded file)
-#    2) bash -c "$(curl -fsSL RAW_URL)"      (from GitHub raw)
-#    3) bash -c "$(wget -qO- RAW_URL)"       (from GitHub raw, wget)
+#  Usage:
+#    bash install.sh                         # Install
+#    bash install.sh --uninstall             # Uninstall
+#    bash -c "$(curl -fsSL RAW_URL)"         # Install via curl pipe
+#    bash -c "$(curl -fsSL RAW_URL)" --uninstall  # Uninstall via curl pipe
 #
 #  After install, run:  dscli
 # ═══════════════════════════════════════════════════════════════════════════
@@ -47,6 +48,88 @@ echo -e "${CY}${B}  ║  90+ Tools · Smart Loop · OCR · Rich    ║${R}"
 echo -e "${CY}${B}  ║  Telegram & Discord · Selenium Browser  ║${R}"
 echo -e "${CY}${B}  ╚══════════════════════════════════════════╝${R}"
 echo ""
+
+# ═══════════════════════════════════════════════════════════════
+# UNINSTALL MODE
+# ═══════════════════════════════════════════════════════════════
+
+UNINSTALL_MODE=false
+case " ${0:-} ${1:-} ${*} " in
+    *\ --uninstall\ *|*\ uninstall\ *) UNINSTALL_MODE=true ;;
+esac
+if $UNINSTALL_MODE; then
+    echo -e "${YE}${B}  ╔══════════════════════════════════════════╗${R}"
+    echo -e "${YE}${B}  ║     DeepSeek CLI v7.7  Uninstaller     ║${R}"
+    echo -e "${YE}${B}  ╚══════════════════════════════════════════╝${R}"
+    echo ""
+
+    # Detect install dirs
+    PKG_DIRS=(
+        "$HOME/.local/lib/deepseek-cli"
+        "$HOME/.deepseek-cli"
+    )
+    BIN_PATH=""
+    for d in /usr/local/bin "$HOME/.local/bin" "${PREFIX:-/data/data/com.termux/files/usr}/bin"; do
+        if [ -f "$d/dscli" ]; then
+            BIN_PATH="$d/dscli"
+            break
+        fi
+    done
+
+    FOUND=false
+
+    # Remove package dirs
+    for d in "${PKG_DIRS[@]}"; do
+        if [ -d "$d/deepseek" ] || [ -d "$d" ]; then
+            echo -e "  ${CY}▸${R} Removing: ${D}$d${R}"
+            rm -rf "$d/deepseek" 2>/dev/null || true
+            rm -rf "$d" 2>/dev/null || true
+            FOUND=true
+        fi
+    done
+
+    # Remove wrapper
+    if [ -n "$BIN_PATH" ] && [ -f "$BIN_PATH" ]; then
+        echo -e "  ${CY}▸${R} Removing: ${D}$BIN_PATH${R}"
+        rm -f "$BIN_PATH"
+        FOUND=true
+    fi
+
+    # Remove from PATH in bashrc/zshrc
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"; do
+        if [ -f "$rc" ]; then
+            if grep -q "deepseek-cli" "$rc" 2>/dev/null; then
+                echo -e "  ${CY}▸${R} Cleaning PATH in: ${D}$rc${R}"
+                sed -i '/# DeepSeek CLI/d' "$rc"
+                sed -i '/deepseek-cli/d' "$rc"
+                FOUND=true
+            fi
+        fi
+    done
+
+    # Remove config (with confirmation)
+    if [ -d "$HOME/.deepseek-cli" ]; then
+        echo ""
+        echo -en "  ${YE}Remove config directory ~/.deepseek-cli? [y/N]${R} "
+        read -r ANS </dev/tty 2>/dev/null || ANS="n"
+        if [ "$ANS" = "y" ] || [ "$ANS" = "Y" ]; then
+            rm -rf "$HOME/.deepseek-cli"
+            echo -e "  ${GR}✓${R} ${D}Config removed${R}"
+        else
+            echo -e "  ${CY}▸${R} ${D}Config kept at ~/.deepseek-cli${R}"
+        fi
+    fi
+
+    echo ""
+    if $FOUND; then
+        echo -e "  ${GR}${B}✓ DeepSeek CLI has been uninstalled.${R}"
+    else
+        echo -e "  ${YE}DeepSeek CLI is not installed or already removed.${R}"
+    fi
+    echo -e "  ${D}Run 'bash install.sh' to reinstall anytime.${R}"
+    echo ""
+    exit 0
+fi
 
 # ═══════════════════════════════════════════════════════════════
 # DETECT ENVIRONMENT
@@ -198,6 +281,7 @@ LOCAL_SOURCE=false
 if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/deepseek" ] && [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
     LOCAL_SOURCE=true
     info "Installing from local source..."
+    rm -rf "$INSTALL_DIR/deepseek" 2>/dev/null || true
     mv "$SCRIPT_DIR/deepseek" "$INSTALL_DIR/"
     mv "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/" 2>/dev/null || true
     ok "Moved from $SCRIPT_DIR"
