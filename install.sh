@@ -274,7 +274,7 @@ step 4 $TOTAL_STEPS "Setting up DeepSeek CLI package"
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$BIN_DIR" 2>/dev/null || true
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
 
 # ── Source detection ──
 LOCAL_SOURCE=false
