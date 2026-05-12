@@ -1,4 +1,4 @@
-# DeepSeek CLI v5.3 — Interactive REPL
+# DeepSeek CLI v7.7 — Interactive REPL
 # Main loop: reads user input, handles slash commands, delegates to Agent
 # Features: Ctrl+P settings panel, arrow-key select menus, command history
 

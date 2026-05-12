@@ -1,4 +1,4 @@
-# DeepSeek CLI v5 — Cleanup old v2 directories on import
+# DeepSeek CLI v7.7 — Cleanup old v2 directories on import
 
 import shutil
 from pathlib import Path

@@ -1,4 +1,4 @@
-# DeepSeek CLI v5 — Entry Point
+# DeepSeek CLI v7.7 — Entry Point
 
 from .repl import main
 

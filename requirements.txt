@@ -1,4 +1,4 @@
-# DeepSeek CLI v7.7 — Python Dependencies
+# DeepSeek CLI v7.7 — Python Dependencies (synchronized)
 # Core (required):
 httpx
 rich

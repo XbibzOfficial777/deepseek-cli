@@ -1028,12 +1028,12 @@ ________                                            __
 \______ \   ____   ____ ______  ______ ____   ____ |  | __
  |    |  \_/ __ \_/ __ \\____ \/  ___// __ \_/ __ \|  |/ /
  |    `   \  ___/\  ___/|  |_> >___ \\  ___/\  ___/|    < 
-/_______  /\___  >\___  >   __/____  >\___  >\___  >__|_ \   [bold red]v7.0[/bold red]
+/_______  /\___  >\___  >   __/____  >\___  >\___  >__|_ \   [bold red]v7.7[/bold red]
         \/     \/     \/|__|       \/     \/     \/     \/[/bold cyan]
 
-[dim]    DeepSeek CLI Agent v7.0[/dim]
+[dim]    DeepSeek CLI Agent v7.7[/dim]
 [dim]    Developer : Xbibz Official[/dim]
-[dim]    Connectors : Telegram & Discord [/dim]
+[dim]    Connectors : Telegram & Discord | Tools: 90+ | Smart Loop[/dim]
 """
 
 

@@ -1,4 +1,4 @@
-# DeepSeek CLI v5 — Multi-Provider Configuration
+# DeepSeek CLI v7.7 — Multi-Provider Configuration
 # Manages 7 AI providers with YAML config file, API keys, and model selection
 # NO TOOL LIMITS — all tools available at all times
 
@@ -28,7 +28,7 @@ DEFAULT_PROVIDERS = {
         'get_key_url': 'https://openrouter.ai/keys',
         'extra_headers': {
             'HTTP-Referer': 'https://deepseek-cli.local',
-            'X-Title': 'DeepSeek CLI v5.5',
+            'X-Title': 'DeepSeek CLI v7.7',
         },
         'popular_models': [
             'deepseek/deepseek-r1-0528:free',

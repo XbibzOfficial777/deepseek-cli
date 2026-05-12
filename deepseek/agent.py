@@ -1,4 +1,4 @@
-# DeepSeek CLI v7.2 — Smart Agentic Loop (FIXED + Enhanced UI + OCR + Rich MD)
+# DeepSeek CLI v7.7 — Smart Agentic Loop (FIXED + Enhanced UI + OCR + Rich MD)
 # ═══════════════════════════════════════════════════════════════
 # FIXED v5.5 — 8-Point Agent Improvement Plan:
 #   1. Smart loop stop: max_rounds=12, max_same_tool=3, same_tool_counter
@@ -268,16 +268,27 @@ def parse_text_tool_calls(content: str, available_tools: dict) -> list:
             cleaned = cleaned.replace(m.group(0), '', 1)
 
     # Pattern 2: tool_name({"arg": "value"}) or tool_name({json})
-    pattern2 = re.compile(
-        r'\b(\w+)\s*\(\s*(\{[^}]*\})\s*\)',
-        re.DOTALL
-    )
-    for m in pattern2.finditer(cleaned):
+    # Uses brace counting to find the matching ')' — handles nested JSON
+    pattern2_head = re.compile(r'\b(\w+)\s*\(\s*(\{)')
+    for m in pattern2_head.finditer(cleaned):
         tool_name = m.group(1)
-        if tool_name in available_tools:
-            args_str = m.group(2).strip()
+        if tool_name not in available_tools:
+            continue
+        start = m.start()
+        brace_count = 1
+        i = m.end(2)  # position after the '{'
+        while i < len(cleaned) and brace_count > 0:
+            if cleaned[i] == '{':
+                brace_count += 1
+            elif cleaned[i] == '}':
+                brace_count -= 1
+            elif cleaned[i] == ')' and brace_count == 0:
+                break
+            i += 1
+        if brace_count == 0 and i < len(cleaned) and cleaned[i] == ')':
+            json_str = cleaned[m.end(2)-1:i+1]
             try:
-                args = json.loads(args_str)
+                args = json.loads(json_str)
                 tool_calls.append({
                     'id': f'text_{tool_name}_{len(tool_calls)}',
                     'type': 'function',
@@ -286,7 +297,7 @@ def parse_text_tool_calls(content: str, available_tools: dict) -> list:
                         'arguments': json.dumps(args)
                     }
                 })
-                cleaned = cleaned.replace(m.group(0), '', 1)
+                cleaned = cleaned[:m.start()] + cleaned[i+1:]
             except (json.JSONDecodeError, TypeError):
                 pass
 

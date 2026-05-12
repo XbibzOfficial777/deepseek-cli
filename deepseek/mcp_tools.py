@@ -9,6 +9,7 @@
 import json
 import os
 import sys
+import random
 import calendar as cal_mod
 import datetime
 import re
@@ -1139,14 +1140,11 @@ def tool_get_random_fact(args: dict) -> str:
             if isinstance(data, dict) and 'events' in data:
                 events = data['events']
                 if events:
-                    # Pick random events
-                    import random
                     selected = random.sample(events, min(5, len(events)))
                     lines = [f"Today in History ({month}/{day})", "=" * 45]
                     for ev in selected:
                         year = ev.get('year', '?')
                         desc = ev.get('description', 'Unknown event')
-                        # Clean HTML
                         desc = re.sub(r'<[^>]+>', '', desc)
                         lines.append(f"\n  {year} — {desc[:150]}")
                     return '\n'.join(lines)
@@ -1154,7 +1152,7 @@ def tool_get_random_fact(args: dict) -> str:
             return "History fact: Unable to fetch today's events"
 
         elif category == 'number':
-            n = number if number else __import__('random').randint(1, 999)
+            n = number if number else random.randint(1, 999)
             data = _http_json(f'http://numbersapi.com/{n}?json', timeout=10)
             if isinstance(data, dict) and 'text' in data:
                 return f"Number Fact: {n}\n{data['text']}"
@@ -1173,7 +1171,6 @@ def tool_get_random_fact(args: dict) -> str:
                 "The Great Wall of China is not visible from space with the naked eye, contrary to popular belief.",
                 "Bananas are naturally slightly radioactive due to their potassium content.",
             ]
-            import random
             return f"Science Fact:\n{random.choice(facts)}"
 
         elif category == 'quote':
@@ -1188,7 +1185,6 @@ def tool_get_random_fact(args: dict) -> str:
                 ("The best time to plant a tree was 20 years ago. The second best time is now.", "Chinese Proverb"),
                 ("Talk is cheap. Show me the code.", "Linus Torvalds"),
             ]
-            import random
             q, a = random.choice(quotes)
             return f"Quote:\n\"{q}\"\n— {a}"
 

@@ -1,4 +1,4 @@
-# DeepSeek CLI v5 — Multi-Provider AI Client
+# DeepSeek CLI v7.7 — Multi-Provider AI Client
 # Real streaming implementations for 7 providers:
 #   OpenRouter, Google Gemini, HuggingFace, OpenAI, Anthropic, Groq, Together AI
 # ALL providers now support tools/skills (HuggingFace via prompt-based tool calling)

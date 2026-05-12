@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════════
-#  DeepSeek CLI v6.1 — Installer
-#  Multi-Provider AI Agent | 7 Providers | 67+ Tools | Smart Loop | OCR
-#  Features: Live Search, Live Model Search, Ctrl+P, Arrow-Key Select
-#  v6.1: OCR support (pytesseract + easyocr), Professional Rich UI animations
+#  DeepSeek CLI v7.7 — Installer
+#  Multi-Provider AI Agent | 7 Providers | 90+ Tools | Smart Loop | OCR
+#  Features: Live Search, Browser Automation, Telegram & Discord Connectors
+#  Document Tools (PPTX/XLSX/DOCX/CSV/PDF), Selenium, Rich Markdown UI
 #
 #  Install methods:
 #    1) bash install.sh                      (from downloaded file)
@@ -33,7 +33,7 @@ err()   { echo -e "${RD}${B}  ✗${R} ${D}$1${R}"; }
 head()  { echo -e "\n${PU}${B}  $1${R}"; echo -e "${PU}  ──────────────────────────────────${R}"; }
 step()  { echo -e "\n${BL}${B}  [$1/$2]${R} ${D}$3${R}"; }
 
-TOTAL_STEPS=5
+TOTAL_STEPS=6
 
 # ═══════════════════════════════════════════════════════════════
 # BANNER
@@ -41,9 +41,10 @@ TOTAL_STEPS=5
 
 echo ""
 echo -e "${CY}${B}  ╔══════════════════════════════════════════╗${R}"
-echo -e "${CY}${B}  ║      DeepSeek CLI v6.1  Installer       ║${R}"
+echo -e "${CY}${B}  ║      DeepSeek CLI v7.7  Installer       ║${R}"
 echo -e "${CY}${B}  ║  Multi-Provider AI Agent · 7 Services   ║${R}"
-echo -e "${CY}${B}  ║  67+ Tools · Smart Loop · OCR · Rich    ║${R}"
+echo -e "${CY}${B}  ║  90+ Tools · Smart Loop · OCR · Rich    ║${R}"
+echo -e "${CY}${B}  ║  Telegram & Discord · Selenium Browser  ║${R}"
 echo -e "${CY}${B}  ╚══════════════════════════════════════════╝${R}"
 echo ""
 
@@ -53,7 +54,6 @@ echo ""
 
 step 1 $TOTAL_STEPS "Detecting environment"
 
-# Fix: initialize PREFIX for set -u (nounset) safety
 PREFIX="${PREFIX:-}"
 IS_TERMUX=false
 IS_MACOS=false
@@ -118,7 +118,6 @@ ok "Python ${PY_MAJOR}.${PY_MINOR} ($PYTHON)"
 
 step 3 $TOTAL_STEPS "Installing Python dependencies"
 
-# Ensure pip is available
 if ! $PYTHON -m pip --version &>/dev/null 2>&1; then
     info "Installing pip..."
     if $IS_TERMUX; then
@@ -128,10 +127,8 @@ if ! $PYTHON -m pip --version &>/dev/null 2>&1; then
     fi
 fi
 
-# Upgrade pip
 $PYTHON -m pip install --quiet --upgrade pip 2>/dev/null || true
 
-# Install packages — check each one
 MISSING=""
 $PYTHON -c "import httpx" 2>/dev/null || MISSING="$MISSING httpx"
 $PYTHON -c "import rich" 2>/dev/null || MISSING="$MISSING rich"
@@ -158,7 +155,6 @@ else
     ok "All dependencies already installed"
 fi
 
-# Verify core deps
 DEPS_OK=true
 $PYTHON -c "import httpx; import rich; import yaml" 2>/dev/null || DEPS_OK=false
 
@@ -168,7 +164,6 @@ if ! $DEPS_OK; then
     exit 1
 fi
 
-# Optional deps warning (not blocking)
 OPT_MISSING=""
 $PYTHON -c "import PyPDF2" 2>/dev/null || OPT_MISSING="$OPT_MISSING PyPDF2"
 $PYTHON -c "import reportlab" 2>/dev/null || OPT_MISSING="$OPT_MISSING reportlab"
@@ -193,23 +188,25 @@ fi
 
 step 4 $TOTAL_STEPS "Setting up DeepSeek CLI package"
 
-# Create directories
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$BIN_DIR" 2>/dev/null || true
 
-# If deepseek/ folder exists in current dir, use it
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
 
-if [ -d "$SCRIPT_DIR/deepseek" ] && [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
+# ── Source detection ──
+LOCAL_SOURCE=false
+if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/deepseek" ] && [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
+    LOCAL_SOURCE=true
     info "Installing from local source..."
     cp -r "$SCRIPT_DIR/deepseek" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/" 2>/dev/null || true
     ok "Copied from $SCRIPT_DIR"
-elif [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
-    # Script is inside the package dir (e.g. GitHub raw single file)
-    info "Installing from GitHub source..."
+fi
+
+if ! $LOCAL_SOURCE; then
+    # Download from GitHub — handles: curl pipe, wget pipe, no local source
     GITHUB_RAW="${GITHUB_RAW_URL:-https://raw.githubusercontent.com/XbibzOfficial777/deepseek-cli/main}"
-    info "Downloading from: $GITHUB_RAW"
+    info "Downloading from GitHub: $GITHUB_RAW"
 
     TEMP_DIR=$(mktemp -d)
     mkdir -p "$TEMP_DIR/deepseek"
@@ -226,11 +223,16 @@ elif [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
         "deepseek/ui.py"
         "deepseek/repl.py"
         "deepseek/mcp_tools.py"
+        "deepseek/doc_tools.py"
+        "deepseek/webcontrol.py"
+        "deepseek/selenium_browser.py"
+        "deepseek/connectors.py"
+        "deepseek/planner.py"
+        "deepseek/tools.py"
         "requirements.txt"
     )
 
     DOWNLOADED=0
-    FAILED=0
     for f in "${FILES[@]}"; do
         url="${GITHUB_RAW}/${f}"
         if curl -fsSL "$url" -o "$TEMP_DIR/$f" 2>/dev/null; then
@@ -238,12 +240,11 @@ elif [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
         elif wget -qO "$TEMP_DIR/$f" "$url" 2>/dev/null; then
             DOWNLOADED=$((DOWNLOADED + 1))
         else
-            FAILED=$((FAILED + 1))
             warn "Failed: $f"
         fi
     done
 
-    if [ $DOWNLOADED -lt 8 ]; then
+    if [ $DOWNLOADED -lt 10 ]; then
         err "Download failed ($DOWNLOADED/$(( ${#FILES[@]} )) files)"
         echo -e "${D}  Make sure the GitHub repo has all files in main branch${R}"
         echo -e "${D}  Or download the zip and run:  bash install.sh  (from extracted dir)${R}"
@@ -255,29 +256,9 @@ elif [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
     cp "$TEMP_DIR/requirements.txt" "$INSTALL_DIR/" 2>/dev/null || true
     rm -rf "$TEMP_DIR"
     ok "Downloaded $DOWNLOADED files"
-else
-    # Already installed — check if update needed
-    if [ -f "$INSTALL_DIR/deepseek/__init__.py" ]; then
-        info "DeepSeek CLI already installed at $INSTALL_DIR"
-        echo -e "${D}  Re-run to update. Current version:${R}"
-        $PYTHON -c "
-import sys; sys.path.insert(0, '$INSTALL_DIR')
-try:
-    from deepseek.config import DEFAULT_PROVIDERS
-    print(f'  {len(DEFAULT_PROVIDERS)} providers configured')
-except Exception as e:
-    print(f'  Error: {e}')
-" 2>/dev/null || warn "Could not detect version"
-    else
-        err "No source found! Download the release zip and run install.sh from inside."
-        echo -e "${D}  1) Download:  https://github.com/XbibzOfficial777/deepseek-cli${R}"
-        echo -e "${D}  2) Extract:   unzip deepseek-cli-v5.1.zip${R}"
-        echo -e "${D}  3) Install:   cd deepseek-cli-v5.1 && bash install.sh${R}"
-        exit 1
-    fi
 fi
 
-# Verify the package works
+# Verify
 VERIFY_OK=false
 VERIFY_OUT=$($PYTHON -c "
 import sys
@@ -289,10 +270,8 @@ try:
     from deepseek.config import cfg
     t = ToolRegistry()
     print(f'{len(t.tools)} tools')
-    VERIFY_OK = True
 except Exception as e:
     print(f'Error: {e}')
-    VERIFY_OK = False
 " 2>&1) && VERIFY_OK=true
 
 if echo "$VERIFY_OUT" | grep -q "Error"; then
@@ -311,7 +290,7 @@ WRAPPER="$BIN_DIR/dscli"
 
 cat > "$WRAPPER" << 'WRAPPER_EOF'
 #!/usr/bin/env bash
-# DeepSeek CLI v5.2 — Launcher
+# DeepSeek CLI v7.7 — Launcher
 # Generated by install.sh
 
 set -euo pipefail
@@ -350,7 +329,6 @@ WRAPPER_EOF
 sed -i "s|__INSTALL_DIR_PLACEHOLDER__|$INSTALL_DIR|g" "$WRAPPER"
 chmod +x "$WRAPPER"
 
-# Ensure BIN_DIR is in PATH — inject into BOTH .bashrc AND .zshrc
 PATH_NEED_FIX=false
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
@@ -358,11 +336,9 @@ case ":$PATH:" in
 esac
 
 if $PATH_NEED_FIX; then
-    # Track which files were modified
     _PATH_INJECTED_BASHRC=false
     _PATH_INJECTED_ZSHRC=false
 
-    # --- Inject into .bashrc ---
     if [ -f "$HOME/.bashrc" ]; then
         if ! grep -q "deepseek-cli" "$HOME/.bashrc" 2>/dev/null; then
             echo "" >> "$HOME/.bashrc"
@@ -380,14 +356,12 @@ if $PATH_NEED_FIX; then
             info "Added to PATH in ~/.bash_profile (no .bashrc)"
         fi
     else
-        # Create .bashrc with the PATH entry
         echo "# DeepSeek CLI - Auto-added by installer" > "$HOME/.bashrc"
         echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.bashrc"
         _PATH_INJECTED_BASHRC=true
         info "Created ~/.bashrc with PATH entry"
     fi
 
-    # --- Inject into .zshrc ---
     if [ -f "$HOME/.zshrc" ]; then
         if ! grep -q "deepseek-cli" "$HOME/.zshrc" 2>/dev/null; then
             echo "" >> "$HOME/.zshrc"
@@ -397,19 +371,16 @@ if $PATH_NEED_FIX; then
             info "Added to PATH in ~/.zshrc"
         fi
     else
-        # Create .zshrc with the PATH entry
         echo "# DeepSeek CLI - Auto-added by installer" > "$HOME/.zshrc"
         echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.zshrc"
         _PATH_INJECTED_ZSHRC=true
         info "Created ~/.zshrc with PATH entry"
     fi
 
-    # Export for current session
     export PATH="$BIN_DIR:$PATH"
     info "PATH exported for current session"
 fi
 
-# Always source the config for immediate availability
 if [ -f "$HOME/.bashrc" ]; then
     . "$HOME/.bashrc" 2>/dev/null || true
 fi
@@ -425,6 +396,35 @@ else
         warn "PATH not updated for current session. Restart terminal or run:"
         echo -e "${D}    export PATH=\"$BIN_DIR:\$PATH\"${R}"
     fi
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# CLEANUP — remove cache, pycache, temp files
+# ═══════════════════════════════════════════════════════════════
+
+step 6 $TOTAL_STEPS "Cleaning up cache & temporary files"
+
+CLEANED=0
+
+# Remove __pycache__ directories
+if [ -d "$INSTALL_DIR/deepseek/__pycache__" ]; then
+    rm -rf "$INSTALL_DIR/deepseek/__pycache__" 2>/dev/null
+    CLEANED=$((CLEANED + 1))
+fi
+
+# Remove any .pyc files (compiled bytecode)
+find "$INSTALL_DIR/deepseek" -name "*.pyc" -delete 2>/dev/null || true
+
+# Remove pip cache if this was a fresh install
+$PYTHON -m pip cache purge 2>/dev/null || true
+
+# Remove temp download directory (if any was left)
+rm -rf /tmp/tmp.*deepseek* /tmp/tmp.*dscli* 2>/dev/null || true
+
+if [ $CLEANED -gt 0 ]; then
+    ok "Cache cleaned ($CLEANED dirs)"
+else
+    ok "No cache files found"
 fi
 
 # ═══════════════════════════════════════════════════════════════
@@ -465,11 +465,13 @@ echo ""
 echo -e "${D}  Supported providers:${R}"
 echo -e "${D}    OpenRouter · Gemini · HuggingFace · OpenAI · Anthropic · Groq · Together${R}"
 echo ""
-echo -e "${D}  All providers support 67+ tools/skills with smart loop protection!${R}"
-echo -e "${D}  NEW v6.1: OCR support (pytesseract + easyocr), Professional Rich UI${R}"
+echo -e "${D}  90+ Tools: File Ops, Web Search, Code, System, Math, Utility,${R}"
+echo -e "${D}    PDF, DOCX, Image, Video, OCR, APK, Live Search, Web Browser,${R}"
+echo -e "${D}    Selenium Automation, PPTX, XLSX, CSV, Document Conversion,${R}"
+echo -e "${D}    Telegram & Discord Connectors${R}"
+echo -e "${D}  v7.7: Rich Markdown, Smooth Buffer, TUI Status Bar, Auth Automation${R}"
 echo ""
 
-# Offer to launch
 if [ $# -eq 0 ] && tty -s; then
     echo -en "${CY}${B}  Launch DeepSeek CLI now? [Y/n]${R} "
     read -r ANSWER </dev/tty 2>/dev/null || ANSWER="y"

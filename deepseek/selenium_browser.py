@@ -94,12 +94,11 @@ DEFAULT_SCRIPT_TIMEOUT = 20
 DEFAULT_IMPLICIT_WAIT = 2
 SCREENSHOT_DIR = os.path.join(tempfile.gettempdir(), 'deepseek-cli-screenshots')
 
-# Fixed paths — no sudo needed
-FIREFOX_BIN = os.environ.get('FIREFOX_BIN', '/home/z/.local/firefox/firefox')
-GECKO_PATH = os.environ.get('GECKO_PATH', '/home/z/.wdm/drivers/geckodriver/linux64/v0.36.0/geckodriver')
+FIREFOX_BIN = os.environ.get('FIREFOX_BIN', '')
+GECKO_PATH = os.environ.get('GECKO_PATH', '')
 
-# Auto-detect geckodriver if default path doesn't exist
-if not os.path.isfile(GECKO_PATH):
+# Auto-detect geckodriver
+if not GECKO_PATH or not os.path.isfile(GECKO_PATH):
     _found = shutil.which('geckodriver')
     if _found:
         GECKO_PATH = _found
@@ -107,7 +106,13 @@ if not os.path.isfile(GECKO_PATH):
         try:
             GECKO_PATH = GeckoDriverManager().install()
         except Exception:
-            GECKO_PATH = '/usr/local/bin/geckodriver'  # fallback
+            GECKO_PATH = 'geckodriver'
+
+# Auto-detect Firefox binary
+if not FIREFOX_BIN or not os.path.isfile(FIREFOX_BIN):
+    _found_firefox = shutil.which('firefox') or shutil.which('firefox-esr') or ''
+    if _found_firefox:
+        FIREFOX_BIN = _found_firefox
 
 
 # ══════════════════════════════════════

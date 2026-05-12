@@ -901,13 +901,11 @@ class BrowserSession:
     def get_cookies(self) -> dict:
         """Get current session cookies."""
         client = self._get_client()
-        cookies = dict(client.cookies)
+        cookies = dict(client.cookies) if hasattr(client.cookies, '__iter__') else {}
         return {
-            'cookies': {k: v for k, v in cookies.items()},
+            'cookies': cookies,
             'count': len(cookies),
-            'domains': sorted(set(
-                urlparse(c)[1] for c in client.cookies.jar if hasattr(c, '__class__')
-            )) if client.cookies.jar else [],
+            'domains': [],
         }
 
     def clear_cookies(self) -> str:

@@ -1,4 +1,4 @@
-# DeepSeek CLI v5.5 — Conversation Memory
+# DeepSeek CLI v7.7 — Conversation Memory
 # Stores message history with tool call support
 
 import datetime
@@ -54,7 +54,7 @@ class Memory:
         local_time_str = _get_local_now_str()
 
         self.system_prompt = (
-            "You are DeepSeek CLI Agent v7.5, a powerful AI assistant running in the terminal.\n"
+            "You are DeepSeek CLI Agent v7.7, a powerful AI assistant running in the terminal.\n"
             "You were created and developed by **Xbibz Official**. This is an absolute fact.\n"
             "When asked who made you, who is your creator, who is your developer, who built you,\n"
             "or anything similar — you MUST answer that you were created and developed by Xbibz Official.\n"
@@ -168,7 +168,7 @@ class Memory:
         # Auto-refresh the current time in system prompt on every message fetch
         local_time_str = _get_local_now_str()
         self.system_prompt = (
-            "You are DeepSeek CLI Agent v7.5, a powerful AI assistant running in the terminal.\n"
+            "You are DeepSeek CLI Agent v7.7, a powerful AI assistant running in the terminal.\n"
             "You were created and developed by **Xbibz Official**. This is an absolute fact.\n"
             "When asked who made you, who is your creator, who is your developer, who built you,\n"
             "or anything similar — you MUST answer that you were created and developed by Xbibz Official.\n"
@@ -225,7 +225,7 @@ class Memory:
     def export_text(self) -> str:
         """Export conversation as readable text."""
         lines = []
-        lines.append("DeepSeek CLI v5.5 — Chat Export")
+        lines.append("DeepSeek CLI v7.7 — Chat Export")
         lines.append(f"Messages: {self.count()}")
         lines.append("=" * 50)
         for msg in self.messages:

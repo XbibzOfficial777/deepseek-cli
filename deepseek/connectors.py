@@ -428,7 +428,10 @@ class DiscordBot:
             if resp.status_code >= 400:
                 self._last_error = f'{resp.status_code}: {result}'
                 return {'ok': False, 'error': f'{resp.status_code}: {result}'}
-            result['ok'] = True
+            if isinstance(result, dict):
+                result['ok'] = True
+            elif isinstance(result, list):
+                return result  # list endpoint, no 'ok' wrapper needed
             return result
         except Exception as e:
             self._last_error = str(e)
@@ -535,7 +538,7 @@ class DiscordBot:
         # Initialize: get the last message ID so we don't replay old messages
         init_result = self._api('GET',
             f'/channels/{self.channel_id}/messages?limit=1')
-        if init_result.get('ok') and isinstance(init_result, list):
+        if isinstance(init_result, list):
             if init_result:
                 self._last_message_id = init_result[0].get('id')
 
@@ -560,7 +563,7 @@ class DiscordBot:
                 result = self._api('GET',
                     f'/channels/{self.channel_id}/messages?limit=10')
 
-                if not result.get('ok') or not isinstance(result, list):
+                if not isinstance(result, list):
                     time.sleep(3)
                     continue
 
