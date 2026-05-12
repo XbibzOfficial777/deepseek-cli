@@ -198,9 +198,9 @@ LOCAL_SOURCE=false
 if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/deepseek" ] && [ -f "$SCRIPT_DIR/deepseek/__init__.py" ]; then
     LOCAL_SOURCE=true
     info "Installing from local source..."
-    cp -r "$SCRIPT_DIR/deepseek" "$INSTALL_DIR/"
-    cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/" 2>/dev/null || true
-    ok "Copied from $SCRIPT_DIR"
+    mv "$SCRIPT_DIR/deepseek" "$INSTALL_DIR/"
+    mv "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/" 2>/dev/null || true
+    ok "Moved from $SCRIPT_DIR"
 fi
 
 if ! $LOCAL_SOURCE; then
