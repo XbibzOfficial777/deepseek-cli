@@ -15,9 +15,6 @@
 import os
 import sys
 import json
-import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*renamed to.*")
 import subprocess
 import math
 import random
@@ -252,13 +249,19 @@ class ToolRegistry:
 
         def delegate_concurrent(args):
             tasks = args.get('tasks', [])
+            if not tasks or not isinstance(tasks, list):
+                # Fallback: single task via profile+task fields
+                profile = args.get('profile', 'general')
+                single_task = args.get('task', '')
+                if single_task:
+                    tasks = [{'profile': profile, 'task': single_task}]
             if not tasks:
-                return 'Error: tasks list is required'
+                return 'Error: tasks list is required. Use format: {"tasks": [{"profile": "...", "task": "..."}]}'
             from .multi_agent import multi_agent_manager
             task_list = [(t.get('profile', 'general'), t.get('task', '')) for t in tasks]
             task_list = [(p, t) for p, t in task_list if t]
             if not task_list:
-                return 'Error: no valid tasks'
+                return 'Error: no valid tasks provided'
             ids = multi_agent_manager.run_concurrent_async(task_list, self)
             profiles_str = ', '.join(ids)
             return (f'Started {len(ids)} agents in background: {profiles_str}\n'
@@ -283,8 +286,10 @@ class ToolRegistry:
                         },
                         'description': 'List of tasks to run concurrently',
                     },
+                    'profile': {'type': 'string', 'description': 'Agent profile for single task (fallback if tasks not provided)'},
+                    'task': {'type': 'string', 'description': 'Single task description (fallback if tasks not provided)'},
                 },
-                'required': ['tasks'],
+                'required': [],
             },
             delegate_concurrent
         )
@@ -1414,7 +1419,10 @@ class ToolRegistry:
 
     def _web_search(self, query: str, max_results: int) -> str:
         try:
-            from duckduckgo_search import DDGS
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
             results = []
             with DDGS() as ddgs:
                 for r in ddgs.text(query, max_results=max_results):
@@ -1592,6 +1600,12 @@ class ToolRegistry:
 
     def _run_shell(self, command: str, timeout: int) -> str:
         try:
+            if os.geteuid() == 0:
+                command = re.sub(r'^\s*sudo\s+', '', command)
+            else:
+                if re.match(r'^\s*sudo\s', command):
+                    if not re.search(r'\s-[in]\s', command):
+                        command = re.sub(r'^\s*sudo\s', 'sudo -n ', command)
             cwd = os.environ.get('DEEPSEEK_ORIGINAL_CWD') or os.getcwd()
             # Safety: reject literal $PWD (wrapper bug in old installs)
             if cwd in ('$PWD', '${PWD}'):
@@ -3257,7 +3271,10 @@ class ToolRegistry:
         # Source 2: Google News (via DuckDuckGo news)
         if source in ('all', 'google'):
             try:
-                from duckduckgo_search import DDGS
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    from duckduckgo_search import DDGS
                 news_results = []
                 with DDGS() as ddgs:
                     for r in ddgs.news(query, max_results=max(max_results, 3)):

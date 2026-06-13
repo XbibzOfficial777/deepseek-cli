@@ -9,9 +9,6 @@
 import json
 import os
 import sys
-import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
-warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*renamed to.*")
 import random
 import calendar as cal_mod
 import datetime
@@ -550,7 +547,10 @@ def tool_get_news(args: dict) -> str:
     source = args.get('source', 'news')
 
     try:
-        from duckduckgo_search import DDGS
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
 
         results = []
         with DDGS() as ddgs:

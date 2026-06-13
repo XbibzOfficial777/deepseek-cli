@@ -290,6 +290,64 @@ def main(session_id: str = None, memory=None):
             except Exception:
                 pass
             console.print()
+            # ── Check for background delegating tasks ──
+            from .multi_agent import multi_agent_manager
+            if multi_agent_manager.running_tasks:
+                console.print('  [bold cyan]═══ Background Delegating ═══[/bold cyan]')
+                for pid, info in list(multi_agent_manager.running_tasks.items())[:3]:
+                    status_color = {'running': 'yellow', 'done': 'green', 'error': 'red'}.get(info['status'], 'dim')
+                    console.print(f'  [{status_color}]{pid}: {info["status"]}[/{status_color}]')
+                console.print()
+                console.print('  [0] [bold]View Delegating[/bold]    [1] [bold]Back To Main[/bold]')
+                console.print('  [dim](Delegating Running In Background)[/dim]')
+                choice = console.input('[bold]you > [/bold]').strip()
+                if choice == '0':
+                    depth = 1
+                    from .multi_agent import multi_agent_manager
+                    history = multi_agent_manager.history
+                    running = multi_agent_manager.running_tasks
+                    all_items = list(history)
+                    if running:
+                        for pid, info in running.items():
+                            if info['status'] in ('running', 'done'):
+                                already = any(
+                                    h.get('profile') == pid and h.get('task') == getattr(info['worker'], 'task', '')
+                                    for h in history
+                                )
+                                if not already:
+                                    all_items.append({
+                                        'profile': pid,
+                                        'task': getattr(info['worker'], 'task', ''),
+                                        'worker': info['worker'],
+                                        '_running': info,
+                                    })
+                    if all_items:
+                        for idx, item in enumerate(all_items):
+                            profile = item.get("profile", "unknown")
+                            task = item.get("task", "")
+                            worker = item.get("worker")
+                            rinfo = item.get('_running')
+                            console.print(f"\n  [bold cyan]--- Sub-Agent ({idx + 1}/{len(all_items)}) ---[/bold cyan]")
+                            console.print(f"  [bold]Profile:[/bold] {profile}")
+                            console.print(f"  [bold]Task:[/bold] {task}")
+                            if rinfo:
+                                status = rinfo.get('status', 'running')
+                                output = rinfo.get('output', '')
+                                s = {'running': '[yellow]> Running[/yellow]', 'done': '[green]v Complete[/green]', 'error': '[red]x Error[/red]'}.get(status, '[dim]Unknown[/dim]')
+                                console.print(f"  [bold]Status:[/bold] {s}")
+                                if output:
+                                    console.print(f"\n[dim]Result:[/dim]\n{output[:600]}")
+                            elif worker:
+                                if worker.result:
+                                    console.print(f"\n[dim]Result:[/dim]\n{worker.result[:600]}")
+                                elif worker.error:
+                                    console.print(f"\n[dim red]Error:[/dim red] {worker.error[:300]}")
+                                else:
+                                    console.print("\n[dim]Status:[/dim] Still running...")
+                        console.print('  [1] [bold]Back To Main[/bold]')
+                        console.input()
+                        depth = 0
+                    console.print()
         except KeyboardInterrupt:
             console.print(f'\n  [dim]Session: [cyan]{session_id}[/cyan] — interrupted[/dim]\n')
         except SystemExit:
