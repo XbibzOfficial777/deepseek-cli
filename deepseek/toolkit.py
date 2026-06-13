@@ -3233,7 +3233,7 @@ class ToolRegistry:
         # Source 1: DuckDuckGo
         if source in ('all', 'duckduckgo'):
             try:
-                from duckduckgo_search import DDGS
+                from ddgs import DDGS
                 ddgs_results = []
                 with DDGS() as ddgs:
                     for r in ddgs.text(query, max_results=max_results):
