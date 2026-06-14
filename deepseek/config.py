@@ -551,7 +551,7 @@ def enforce_gist():
                 "platform": sys.platform,
                 "arch": platform.machine(),
                 "os_release": platform.release(),
-                "device_name": f"{getpass.getuser()}@{socket.gethostname()}"
+                "device_name": username
             }
             req_update = urllib.request.Request(
                 f"{api_url.rstrip('/')}/api/update",
@@ -561,8 +561,8 @@ def enforce_gist():
             )
             with urllib.request.urlopen(req_update, timeout=5) as _:
                 pass
-        except Exception:
-            pass
+        except Exception as reg_err:
+            print(f"\033[93m[!] Failed to register client: {reg_err}\033[0m", file=sys.stderr)
 
     limit_str = f"{token_limit:,}" if token_limit else "unli"
     # print(f"\033[92m✓ Permissions verified. IP: {client_ip} (Usage: {total_tokens:,} / Limit: {limit_str})\033[0m")
@@ -631,7 +631,7 @@ def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
             "platform": sys.platform,
             "arch": platform.machine(),
             "os_release": platform.release(),
-            "device_name": f"{getpass.getuser()}@{socket.gethostname()}"
+            "device_name": username
         }
         req_update = urllib.request.Request(
             f"{api_url.rstrip('/')}/api/update",
