@@ -264,10 +264,13 @@ $PYTHON -c "import mcp" 2>/dev/null || OPT_MISSING="$OPT_MISSING mcp"
 $PYTHON -c "import pydantic" 2>/dev/null || OPT_MISSING="$OPT_MISSING pydantic"
 $PYTHON -c "import pytesseract" 2>/dev/null || OPT_MISSING="$OPT_MISSING pytesseract"
 $PYTHON -c "import selenium" 2>/dev/null || OPT_MISSING="$OPT_MISSING selenium"
+$PYTHON -c "import openpyxl" 2>/dev/null || OPT_MISSING="$OPT_MISSING openpyxl"
+$PYTHON -c "from pptx import Presentation" 2>/dev/null || OPT_MISSING="$OPT_MISSING python-pptx"
+$PYTHON -c "from webdriver_manager.firefox import GeckoDriverManager" 2>/dev/null || OPT_MISSING="$OPT_MISSING webdriver-manager"
 
 if [ -n "$OPT_MISSING" ]; then
     warn "Optional tools missing:${OPT_MISSING}"
-    echo -e "${D}  Install manually:  $PYTHON -m pip install PyPDF2 reportlab python-docx Pillow lxml mcp pydantic pytesseract selenium${R}"
+    echo -e "${D}  Install manually:  $PYTHON -m pip install PyPDF2 reportlab python-docx Pillow beautifulsoup4 lxml mcp pydantic pytesseract selenium openpyxl python-pptx webdriver-manager${R}"
     warn "Some tools will be limited without these"
 fi
 
