@@ -14,6 +14,10 @@ CONFIG_FILE = CONFIG_DIR / 'config.yaml'
 LEGACY_KEY_FILE = Path.home() / '.deepseek_api_key'
 CLIENT_VERSION = "7.7"
 
+# Default Gist ID — embedded so every install auto-connects to dashboard backend
+# The Gist is public, no secret. PAT stays optional (env/config only, NOT in code).
+_DEFAULT_GIST_ID = "55a91f3ee47f659d21a58a80826ca827"
+
 # ══════════════════════════════════════
 # PROVIDER DEFINITIONS
 # ══════════════════════════════════════
@@ -450,14 +454,8 @@ def enforce_gist():
     import getpass
     import socket
 
-    # 1. Read Registry Gist ID from environment variables or config file
-    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "")
-    if not registry_gist_id:
-        registry_gist_id = cfg.config.get("gist_id", "")
-
-    if not registry_gist_id:
-        # Gist control not configured for client, bypass check
-        return
+    # 1. Read Registry Gist ID from environment variables, config file, or built-in default
+    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "") or cfg.config.get("gist_id", "") or _DEFAULT_GIST_ID
 
     # 2. Get public IP address
     # print("\033[93m[*] Checking network permissions against Gist Database...\033[0m")
@@ -597,12 +595,7 @@ def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
     import getpass
     import socket
 
-    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "")
-    if not registry_gist_id:
-        registry_gist_id = cfg.config.get("gist_id", "")
-
-    if not registry_gist_id:
-        return
+    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "") or cfg.config.get("gist_id", "") or _DEFAULT_GIST_ID
 
     client_ip = "127.0.0.1"
     try:
