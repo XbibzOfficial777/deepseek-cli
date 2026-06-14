@@ -117,6 +117,7 @@ SLASH_COMMANDS = [
     ('/telegram',      'Telegram connector menu'),
     ('/discord',       'Discord connector menu'),
     ('/mcp',           'MCP server management'),
+    ('/sudo',          'Set sudo password for session (stored in memory only)'),
     ('/exit',          'Exit the CLI'),
 ]
 

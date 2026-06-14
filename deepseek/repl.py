@@ -379,6 +379,18 @@ def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) 
         show_help()
         return ''
 
+    # ── /sudo ─────────────────────────
+    if command == '/sudo':
+        import getpass
+        pwd = getpass.getpass('  Sudo password: ')
+        if pwd:
+            agent.tools.set_sudo_password(pwd)
+            console.print('  [green]Sudo password set for this session (memory only).[/green]')
+        else:
+            console.print('  [yellow]No password entered.[/yellow]')
+        console.print()
+        return ''
+
     # ── /exit ─────────────────────────
     if command in ('/exit', '/quit', '/q'):
         sid = getattr(memory, '_current_session_id', '?')

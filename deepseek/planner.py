@@ -164,7 +164,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         """Detect queries that don't need planning."""
         trivial_patterns = [
             '/help', '/exit', '/clear', '/version', '/tools',
-            '/info', '/thinking', '/compact', '/export',
+            '/info', '/thinking', '/compact', '/export', '/sudo',
         ]
         query_lower = query.strip().lower()
         for p in trivial_patterns:

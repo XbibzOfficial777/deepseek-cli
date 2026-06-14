@@ -36,6 +36,7 @@ import platform
 import zipfile
 import struct
 import re
+import shlex
 import io
 import tempfile
 import traceback
@@ -72,6 +73,7 @@ class ToolRegistry:
         self.tools: dict[str, dict] = {}
         self._validation_models: dict[str, type] = {}
         self._memory = memory
+        self._sudo_password: str = ''
         self._register_all()
         # Build Pydantic validation models for all registered tools
         if PYDANTIC_AVAILABLE:
@@ -1609,13 +1611,18 @@ class ToolRegistry:
         except Exception as e:
             return f"Code execution error: {e}"
 
+    def set_sudo_password(self, password: str):
+        self._sudo_password = password
+
     def _run_shell(self, command: str, timeout: int) -> str:
         try:
             if os.geteuid() == 0:
                 command = re.sub(r'^\s*sudo\s+', '', command)
             else:
                 if re.match(r'^\s*sudo\s', command):
-                    if not re.search(r'\s-[in]\s', command):
+                    if self._sudo_password:
+                        command = re.sub(r'^\s*sudo\s', f'echo {shlex.quote(self._sudo_password)} | sudo -S ', command)
+                    elif not re.search(r'\s-[in]\s', command):
                         command = re.sub(r'^\s*sudo\s', 'sudo -n ', command)
             cwd = os.environ.get('DEEPSEEK_ORIGINAL_CWD') or os.getcwd()
             # Safety: reject literal $PWD (wrapper bug in old installs)
