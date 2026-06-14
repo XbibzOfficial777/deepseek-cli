@@ -9,6 +9,7 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / '.deepseek-cli'
 CONFIG_FILE = CONFIG_DIR / 'config.yaml'
 LEGACY_KEY_FILE = Path.home() / '.deepseek_api_key'
+CLIENT_VERSION = "7.7"
 
 # ══════════════════════════════════════
 # PROVIDER DEFINITIONS
@@ -431,3 +432,265 @@ def mask_key(key: str) -> str:
 
 # Global instance
 cfg = ConfigManager()
+
+
+def enforce_gist():
+    """Fetches resolved Worker API and checks if the current public IP is banned or limited."""
+    import os
+    import sys
+    import urllib.request
+    import urllib.error
+    import json
+    import getpass
+    import socket
+
+    # 1. Read Registry Gist ID from environment variables or config file
+    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "")
+    if not registry_gist_id:
+        registry_gist_id = cfg.config.get("gist_id", "")
+
+    if not registry_gist_id:
+        # Gist control not configured for client, bypass check
+        return
+
+    # 2. Get public IP address
+    # print("\033[93m[*] Checking network permissions against Gist Database...\033[0m")
+    client_ip = "127.0.0.1"
+    try:
+        req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            client_ip = json.loads(response.read().decode()).get("ip", "127.0.0.1")
+    except Exception:
+        pass
+
+    # 3. Fetch registry to find Cloudflare Worker URL
+    api_url = None
+    try:
+        url = f"https://api.github.com/gists/{registry_gist_id}"
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        gist_pat = os.environ.get("DEEPSEEK_GIST_PAT", "") or cfg.config.get("gist_pat", "")
+        if gist_pat:
+            headers["Authorization"] = f"token {gist_pat}"
+
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as response:
+            gist_content = json.loads(response.read().decode())
+            file_data = gist_content.get("files", {}).get("endpoint.json", {})
+            if not file_data:
+                print("\033[91mError: Registry endpoint.json not found in registry Gist.\033[0m", file=sys.stderr)
+                sys.exit(1)
+            registry_payload = json.loads(file_data["content"])
+            api_url = registry_payload.get("api_url")
+            latest_version = registry_payload.get("latest_version")
+            if latest_version and latest_version != CLIENT_VERSION:
+                print(f"\n\033[93m[!] NOTICE: A newer version of DeepSeek CLI is available (v{latest_version}).\033[0m", file=sys.stderr)
+                print(f"\033[93m    Your current version is v{CLIENT_VERSION}. Run 'bash install.sh' to update.\033[0m\n", file=sys.stderr)
+    except Exception as e:
+        print(f"\033[91mFailed to resolve dashboard backend: {e}\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    if not api_url:
+        print("\033[91mError: api_url not defined in registry Gist.\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    # 4. Check permissions from Worker API
+    try:
+        check_url = f"{api_url.rstrip('/')}/api/check?ip={client_ip}"
+        req = urllib.request.Request(check_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as response:
+            result = json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        print(f"\033[91mFailed to verify access permissions with server (HTTP {e.code}).\033[0m", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"\033[91mFailed to verify access permissions with server: {e}\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    is_banned = result.get("banned", False)
+    is_limited = result.get("limit_exceeded", False)
+    total_tokens = result.get("usage", 0)
+    token_limit = result.get("limit", 0)
+
+    # Check Ban state
+    if is_banned:
+        print("\n\033[1;31m██████████████████████████████████████████████████\033[0m", file=sys.stderr)
+        print(f"\033[1;31mACCESS DENIED! IP {client_ip} has been BANNED.\033[0m", file=sys.stderr)
+        print("\033[1;31mPlease contact the network administrator to restore access.\033[0m", file=sys.stderr)
+        print("\033[1;31m██████████████████████████████████████████████████\n\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    # Check Limit state
+    if is_limited:
+        print("\n\033[1;31m██████████████████████████████████████████████████\033[0m", file=sys.stderr)
+        print("\033[1;31mACCESS DENIED! Token limit has been exceeded.\033[0m", file=sys.stderr)
+        print(f"\033[1;31mConsumed: {total_tokens:,} / Limit: {token_limit:,} tokens.\033[0m", file=sys.stderr)
+        print("\033[1;31mPlease contact the network administrator to raise your limit.\033[0m", file=sys.stderr)
+        print("\033[1;31m██████████████████████████████████████████████████\n\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    # Register client if not found
+    if not result.get("found", False):
+        try:
+            username = f"{getpass.getuser()}@{socket.gethostname()}"
+        except Exception:
+            username = f"cli_client_{client_ip.replace('.', '_')}"
+        
+        try:
+            payload = {
+                "ip": client_ip,
+                "username": username,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "last_tool": "initialization",
+                "status": "online",
+                "version": CLIENT_VERSION
+            }
+            req_update = urllib.request.Request(
+                f"{api_url.rstrip('/')}/api/update",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req_update, timeout=5) as _:
+                pass
+        except Exception:
+            pass
+
+    limit_str = f"{token_limit:,}" if token_limit else "unli"
+    # print(f"\033[92m✓ Permissions verified. IP: {client_ip} (Usage: {total_tokens:,} / Limit: {limit_str})\033[0m")
+
+
+def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
+    """Updates the token counts, status, and last tool of the client IP on the Worker backend."""
+    import os
+    import urllib.request
+    import urllib.error
+    import json
+    import getpass
+    import socket
+
+    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "")
+    if not registry_gist_id:
+        registry_gist_id = cfg.config.get("gist_id", "")
+
+    if not registry_gist_id:
+        return
+
+    client_ip = "127.0.0.1"
+    try:
+        req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            client_ip = json.loads(response.read().decode()).get("ip", "127.0.0.1")
+    except Exception:
+        pass
+
+    # Fetch registry to find Cloudflare Worker URL
+    api_url = None
+    try:
+        url = f"https://api.github.com/gists/{registry_gist_id}"
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        gist_pat = os.environ.get("DEEPSEEK_GIST_PAT", "") or cfg.config.get("gist_pat", "")
+        if gist_pat:
+            headers["Authorization"] = f"token {gist_pat}"
+
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as response:
+            gist_content = json.loads(response.read().decode())
+            file_data = gist_content.get("files", {}).get("endpoint.json", {})
+            if file_data:
+                api_url = json.loads(file_data["content"]).get("api_url")
+    except Exception:
+        return
+
+    if not api_url:
+        return
+
+    try:
+        username = f"{getpass.getuser()}@{socket.gethostname()}"
+    except Exception:
+        username = f"cli_client_{client_ip.replace('.', '_')}"
+
+    try:
+        payload = {
+            "ip": client_ip,
+            "username": username,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "last_tool": last_tool,
+            "status": "online",
+            "version": CLIENT_VERSION
+        }
+        req_update = urllib.request.Request(
+            f"{api_url.rstrip('/')}/api/update",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req_update, timeout=8) as _:
+            pass
+    except Exception:
+        pass
+
+
+def get_usage_status() -> dict:
+    """Fetches the current client IP usage status from the Cloudflare Worker API."""
+    import os
+    import urllib.request
+    import json
+    
+    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "")
+    if not registry_gist_id:
+        registry_gist_id = cfg.config.get("gist_id", "")
+    if not registry_gist_id:
+        return None
+
+    # Get IP
+    client_ip = "127.0.0.1"
+    try:
+        req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            client_ip = json.loads(response.read().decode()).get("ip", "127.0.0.1")
+    except Exception:
+        pass
+
+    # Fetch registry to find Cloudflare Worker URL
+    api_url = None
+    try:
+        url = f"https://api.github.com/gists/{registry_gist_id}"
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        gist_pat = os.environ.get("DEEPSEEK_GIST_PAT", "") or cfg.config.get("gist_pat", "")
+        if gist_pat:
+            headers["Authorization"] = f"token {gist_pat}"
+
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as response:
+            gist_content = json.loads(response.read().decode())
+            file_data = gist_content.get("files", {}).get("endpoint.json", {})
+            if file_data:
+                api_url = json.loads(file_data["content"]).get("api_url")
+    except Exception:
+        return None
+
+    if not api_url:
+        return None
+
+    # Fetch status from Worker
+    try:
+        check_url = f"{api_url.rstrip('/')}/api/check?ip={client_ip}"
+        req = urllib.request.Request(check_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as response:
+            result = json.loads(response.read().decode())
+            return {
+                "ip": client_ip,
+                "usage": result.get("usage", 0),
+                "limit": result.get("limit", 0),
+                "last_tool": result.get("last_tool", "-"),
+                "total_calls": result.get("total_calls", 0),
+                "username": result.get("username", "Unknown"),
+                "banned": result.get("banned", False),
+                "limit_exceeded": result.get("limit_exceeded", False),
+                "found": result.get("found", False)
+            }
+    except Exception:
+        return None
+

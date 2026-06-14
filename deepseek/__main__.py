@@ -296,6 +296,10 @@ def main():
         memory = None
         session_id = new_session_id()
 
+    # Enforce access permissions (banned/limit checks)
+    from .config import enforce_gist
+    enforce_gist()
+
     repl_main(session_id=session_id, memory=memory)
 
 

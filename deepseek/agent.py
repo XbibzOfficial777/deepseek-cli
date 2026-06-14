@@ -757,6 +757,36 @@ class Agent:
         Returns {'content': str, 'tool_rounds': int, 'error': str|None,
                  'stopped_by': str|None, 'metrics': dict}
         """
+        from .config import enforce_gist
+        enforce_gist()
+        
+        try:
+            res = self._chat_impl(user_message)
+            return res
+        finally:
+            try:
+                content = ""
+                tools_used_list = []
+                if hasattr(self, 'metrics') and self.metrics.turn_history:
+                    last_turn = self.metrics.turn_history[-1]
+                    content = last_turn.get('content_preview', '')
+                    tools_used_list = last_turn.get('tools_used', [])
+                
+                input_est = len(user_message) // 3 + 1000
+                output_est = len(content) // 3 if content else 100
+                last_tool = tools_used_list[-1] if tools_used_list else "none"
+                
+                from .config import update_gist_usage
+                import threading
+                threading.Thread(
+                    target=update_gist_usage,
+                    args=(input_est, output_est, last_tool),
+                    daemon=True
+                ).start()
+            except Exception:
+                pass
+
+    def _chat_impl(self, user_message: str) -> dict:
         self.memory.add_user(user_message)
         self.created_files.clear()
 

@@ -1380,6 +1380,20 @@ def show_info(agent: Agent, memory: Memory):
     table.add_row('Messages', str(memory.count()))
     table.add_row('Tools', str(len(agent.tools.get_tool_list())))
 
+    # Fetch and add client usage status securely
+    from .config import get_usage_status
+    status = get_usage_status()
+    if status:
+        table.add_row('', '')  # Spacer
+        table.add_row('[bold cyan]Network / Usage status[/bold cyan]', '')
+        table.add_row('Client Username', status.get('username', 'Unknown'))
+        table.add_row('Client IP', status.get('ip', 'Unknown'))
+        limit_val = status.get('limit', 0)
+        limit_str = f"{limit_val:,}" if limit_val else "unli"
+        table.add_row('Token Usage', f"{status.get('usage', 0):,} / {limit_str}")
+        table.add_row('Last Tool Used', status.get('last_tool', '-'))
+        table.add_row('Total Tool Calls', str(status.get('total_calls', 0)))
+
     console.print(table)
     console.print()
 

@@ -1538,17 +1538,17 @@ def interactive_filter_select(items, title=None):
         os.write(out_fd, b'\033[?25l')
         if title:
             t = _clip(f'  {title}' + (f' [{len(filtered)}]' if len(filtered) != len(items) else ''))
-            os.write(out_fd, f'\r\033[1;36m{t}\033[0m\033[K\033[1B'.encode())
+            os.write(out_fd, f'\r\033[1;36m{t}\033[0m\033[K\r\n'.encode())
         fline = f'  \033[2mfilter:\033[0m {filter_text}' if filter_text else '  \033[2mtype to filter...\033[0m'
-        os.write(out_fd, f'\r{fline}\033[K\033[1B'.encode())
+        os.write(out_fd, f'\r{fline}\033[K\r\n'.encode())
         for i, item in enumerate(filtered):
             if i == selected:
-                os.write(out_fd, f'\r\033[1;32m  >> {_clip(item)}\033[0m\033[K\033[1B'.encode())
+                os.write(out_fd, f'\r\033[1;32m  >> {_clip(item)}\033[0m\033[K\r\n'.encode())
             else:
-                os.write(out_fd, f'\r     {_clip(item)}\033[K\033[1B'.encode())
+                os.write(out_fd, f'\r     {_clip(item)}\033[K\r\n'.encode())
         hint = _clip('    ↑↓: nav | Enter: select | Esc: cancel')
-        os.write(out_fd, f'\r\033[2m{hint}\033[K'.encode())
-        os.write(out_fd, b'\033[1B\033[?25h')
+        os.write(out_fd, f'\r\033[2m{hint}\033[K\r\n'.encode())
+        os.write(out_fd, b'\033[?25h')
         sys.stdout.flush()
 
     def redraw():
@@ -1658,8 +1658,8 @@ def interactive_select(items, title=None, active_index=0):
     out_fd = sys.stdout.fileno()
 
     # Count total lines drawn (for redraw)
-    # = items + (optional title) + hint line + final blank line
-    total_lines = len(items) + (1 if title else 0) + 2
+    # = items + (optional title) + hint line
+    total_lines = len(items) + (1 if title else 0) + 1
 
     def _menu_width():
         """Current terminal width (columns), with safe fallbacks."""
@@ -1687,17 +1687,16 @@ def interactive_select(items, title=None, active_index=0):
         os.write(out_fd, b'\033[?25l')  # Hide cursor
         if title:
             line = _clip(f'  {title}')
-            os.write(out_fd, f'\r\033[1;36m{line}\033[0m\033[K\033[1B'.encode())
+            os.write(out_fd, f'\r\033[1;36m{line}\033[0m\033[K\r\n'.encode())
         for i, item in enumerate(items):
             if i == selected:
                 line = _clip(f'  >> {item}')
-                os.write(out_fd, f'\r\033[1;32m{line}\033[0m\033[K\033[1B'.encode())
+                os.write(out_fd, f'\r\033[1;32m{line}\033[0m\033[K\r\n'.encode())
             else:
                 line = _clip(f'     {item}')
-                os.write(out_fd, f'\r{line}\033[0m\033[K\033[1B'.encode())
+                os.write(out_fd, f'\r{line}\033[0m\033[K\r\n'.encode())
         hint = _clip('    Up/Down: navigate | Enter: select | Esc: cancel')
-        os.write(out_fd, f'\r\033[2m{hint}\033[0m\033[K'.encode())
-        os.write(out_fd, b'\033[1B')
+        os.write(out_fd, f'\r\033[2m{hint}\033[0m\033[K\r\n'.encode())
         os.write(out_fd, b'\033[?25h')  # Show cursor
         sys.stdout.flush()
 

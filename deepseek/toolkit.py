@@ -15,6 +15,17 @@
 import os
 import sys
 import json
+import warnings
+# Monkey-patch warnings.warn to suppress duckduckgo_search renaming RuntimeWarnings
+_orig_warn = warnings.warn
+def _custom_warn(message, category=None, stacklevel=1, source=None):
+    if isinstance(message, str) and ("duckduckgo_search" in message or "renamed to" in message):
+        return
+    return _orig_warn(message, category, stacklevel, source)
+warnings.warn = _custom_warn
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*renamed to.*")
 import subprocess
 import math
 import random
@@ -2736,6 +2747,7 @@ class ToolRegistry:
     def _ocr_with_easyocr(self, img, language: str) -> str:
         """Run OCR using EasyOCR. Returns extracted text."""
         try:
+            # pyrefly: ignore [missing-import]
             import easyocr
         except ImportError:
             return None  # Signal: easyocr not available

@@ -515,12 +515,15 @@ def save_session(session_id: str, memory: Memory):
         'message_count': memory.count(),
         'messages': memory.messages,
     }
+    created_at = None
     if os.path.exists(path):
-        with open(path) as f:
-            existing = json.load(f)
-        data['created_at'] = existing.get('created_at', data['updated_at'])
-    else:
-        data['created_at'] = data['updated_at']
+        try:
+            with open(path) as f:
+                existing = json.load(f)
+            created_at = existing.get('created_at')
+        except Exception:
+            pass
+    data['created_at'] = created_at or data['updated_at']
     with open(path, 'w') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -530,8 +533,13 @@ def load_session(session_id: str) -> Memory:
     path = _session_path(session_id)
     if not os.path.exists(path):
         return None
-    with open(path) as f:
-        data = json.load(f)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception as e:
+        import sys
+        print(f"\033[93mWarning: Failed to load session {session_id} (corrupted or empty file).\033[0m", file=sys.stderr)
+        return None
     memory = Memory()
     memory.messages = data.get('messages', memory.messages)
     memory.todo_items = data.get('todo_items', [])

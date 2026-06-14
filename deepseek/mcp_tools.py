@@ -9,6 +9,17 @@
 import json
 import os
 import sys
+import warnings
+# Monkey-patch warnings.warn to suppress duckduckgo_search renaming RuntimeWarnings
+_orig_warn = warnings.warn
+def _custom_warn(message, category=None, stacklevel=1, source=None):
+    if isinstance(message, str) and ("duckduckgo_search" in message or "renamed to" in message):
+        return
+    return _orig_warn(message, category, stacklevel, source)
+warnings.warn = _custom_warn
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*renamed to.*")
 import random
 import calendar as cal_mod
 import datetime
