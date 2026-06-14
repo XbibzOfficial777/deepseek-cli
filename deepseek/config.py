@@ -3,6 +3,9 @@
 # NO TOOL LIMITS — all tools available at all times
 
 import os
+import sys
+import platform
+import socket
 import yaml
 from pathlib import Path
 
@@ -543,7 +546,12 @@ def enforce_gist():
                 "output_tokens": 0,
                 "last_tool": "initialization",
                 "status": "online",
-                "version": CLIENT_VERSION
+                "version": CLIENT_VERSION,
+                "hostname": socket.gethostname(),
+                "platform": sys.platform,
+                "arch": platform.machine(),
+                "os_release": platform.release(),
+                "device_name": f"{getpass.getuser()}@{socket.gethostname()}"
             }
             req_update = urllib.request.Request(
                 f"{api_url.rstrip('/')}/api/update",
@@ -618,7 +626,12 @@ def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
             "output_tokens": output_tokens,
             "last_tool": last_tool,
             "status": "online",
-            "version": CLIENT_VERSION
+            "version": CLIENT_VERSION,
+            "hostname": socket.gethostname(),
+            "platform": sys.platform,
+            "arch": platform.machine(),
+            "os_release": platform.release(),
+            "device_name": f"{getpass.getuser()}@{socket.gethostname()}"
         }
         req_update = urllib.request.Request(
             f"{api_url.rstrip('/')}/api/update",
