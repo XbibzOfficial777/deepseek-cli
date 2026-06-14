@@ -436,6 +436,9 @@ def mask_key(key: str) -> str:
 # Global instance
 cfg = ConfigManager()
 
+# Cached usage status from enforce_gist() — avoids redundant API calls that can fail on Termux
+_cached_usage_status = None
+
 
 def enforce_gist():
     """Fetches resolved Worker API and checks if the current public IP is banned or limited."""
@@ -539,6 +542,10 @@ def enforce_gist():
             username = f"cli_client_{client_ip.replace('.', '_')}"
         
         try:
+            try:
+                _hostname = socket.gethostname()
+            except Exception:
+                _hostname = "unknown"
             payload = {
                 "ip": client_ip,
                 "username": username,
@@ -547,7 +554,7 @@ def enforce_gist():
                 "last_tool": "initialization",
                 "status": "online",
                 "version": CLIENT_VERSION,
-                "hostname": socket.gethostname(),
+                "hostname": _hostname,
                 "platform": sys.platform,
                 "arch": platform.machine(),
                 "os_release": platform.release(),
@@ -563,6 +570,19 @@ def enforce_gist():
                 pass
         except Exception as reg_err:
             print(f"\033[93m[!] Failed to register client: {reg_err}\033[0m", file=sys.stderr)
+
+    global _cached_usage_status
+    _cached_usage_status = {
+        "ip": client_ip,
+        "usage": result.get("usage", 0),
+        "limit": result.get("limit", 0),
+        "last_tool": result.get("last_tool", "-"),
+        "total_calls": result.get("total_calls", 0),
+        "username": result.get("username", "Unknown"),
+        "banned": result.get("banned", False),
+        "limit_exceeded": result.get("limit_exceeded", False),
+        "found": result.get("found", False)
+    }
 
     limit_str = f"{token_limit:,}" if token_limit else "unli"
     # print(f"\033[92m✓ Permissions verified. IP: {client_ip} (Usage: {total_tokens:,} / Limit: {limit_str})\033[0m")
@@ -619,6 +639,10 @@ def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
         username = f"cli_client_{client_ip.replace('.', '_')}"
 
     try:
+        try:
+            _hostname = socket.gethostname()
+        except Exception:
+            _hostname = "unknown"
         payload = {
             "ip": client_ip,
             "username": username,
@@ -627,7 +651,7 @@ def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
             "last_tool": last_tool,
             "status": "online",
             "version": CLIENT_VERSION,
-            "hostname": socket.gethostname(),
+            "hostname": _hostname,
             "platform": sys.platform,
             "arch": platform.machine(),
             "os_release": platform.release(),
@@ -646,64 +670,7 @@ def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
 
 
 def get_usage_status() -> dict:
-    """Fetches the current client IP usage status from the Cloudflare Worker API."""
-    import os
-    import urllib.request
-    import json
-    
-    registry_gist_id = os.environ.get("DEEPSEEK_GIST_ID", "")
-    if not registry_gist_id:
-        registry_gist_id = cfg.config.get("gist_id", "")
-    if not registry_gist_id:
-        return None
-
-    # Get IP
-    client_ip = "127.0.0.1"
-    try:
-        req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            client_ip = json.loads(response.read().decode()).get("ip", "127.0.0.1")
-    except Exception:
-        pass
-
-    # Fetch registry to find Cloudflare Worker URL
-    api_url = None
-    try:
-        url = f"https://api.github.com/gists/{registry_gist_id}"
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        gist_pat = os.environ.get("DEEPSEEK_GIST_PAT", "") or cfg.config.get("gist_pat", "")
-        if gist_pat:
-            headers["Authorization"] = f"token {gist_pat}"
-
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=8) as response:
-            gist_content = json.loads(response.read().decode())
-            file_data = gist_content.get("files", {}).get("endpoint.json", {})
-            if file_data:
-                api_url = json.loads(file_data["content"]).get("api_url")
-    except Exception:
-        return None
-
-    if not api_url:
-        return None
-
-    # Fetch status from Worker
-    try:
-        check_url = f"{api_url.rstrip('/')}/api/check?ip={client_ip}"
-        req = urllib.request.Request(check_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=8) as response:
-            result = json.loads(response.read().decode())
-            return {
-                "ip": client_ip,
-                "usage": result.get("usage", 0),
-                "limit": result.get("limit", 0),
-                "last_tool": result.get("last_tool", "-"),
-                "total_calls": result.get("total_calls", 0),
-                "username": result.get("username", "Unknown"),
-                "banned": result.get("banned", False),
-                "limit_exceeded": result.get("limit_exceeded", False),
-                "found": result.get("found", False)
-            }
-    except Exception:
-        return None
+    """Returns cached usage status from startup check."""
+    global _cached_usage_status
+    return _cached_usage_status
 
