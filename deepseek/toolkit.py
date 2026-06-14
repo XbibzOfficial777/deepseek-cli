@@ -235,6 +235,7 @@ class ToolRegistry:
         self._register_selenium_tools()
         self._register_doc_tools()
         self._register_mcp_client_tools()
+        self._register_geo_tools()
         self._register_agent_tools()
 
     def _register_agent_tools(self):
@@ -332,6 +333,80 @@ class ToolRegistry:
             pass  # MCP not installed — skip real-time tools
         except Exception:
             pass  # Error loading MCP — skip silently
+
+    # ══════════════════════════════════════
+    # GEO TOOLS (v7.7)
+    # Nominatim geocoding, OSRM routing, Overpass place queries
+    # All free, no API key required
+    # ══════════════════════════════════════
+
+    def _register_geo_tools(self):
+        self.register(
+            'geo_search',
+            'Search for places/addresses worldwide using Nominatim (OpenStreetMap). '
+            'Returns coordinates, display name, and address details. '
+            'Use this to geocode addresses, find landmarks, or get lat/lon from a place name.',
+            {
+                'type': 'object',
+                'properties': {
+                    'query': {'type': 'string', 'description': 'Place name or address to search (e.g. "Eiffel Tower, Paris" or "1600 Amphitheatre Parkway, Mountain View")'},
+                    'limit': {'type': 'integer', 'description': 'Max results (default 5, max 20)'}
+                },
+                'required': ['query']
+            },
+            lambda args: self._geo_search(args['query'], args.get('limit', 5))
+        )
+
+        self.register(
+            'geo_reverse',
+            'Reverse geocode coordinates to an address using Nominatim (OpenStreetMap). '
+            'Returns the nearest address, street, city, country for given lat/lon.',
+            {
+                'type': 'object',
+                'properties': {
+                    'lat': {'type': 'number', 'description': 'Latitude (e.g. 48.8584)'},
+                    'lon': {'type': 'number', 'description': 'Longitude (e.g. 2.2945)'}
+                },
+                'required': ['lat', 'lon']
+            },
+            lambda args: self._geo_reverse(args['lat'], args['lon'])
+        )
+
+        self.register(
+            'geo_directions',
+            'Get driving, cycling, or walking directions between two points using OSRM (Open Source Routing Machine). '
+            'Returns distance, duration, and turn-by-turn instructions.',
+            {
+                'type': 'object',
+                'properties': {
+                    'from_lat': {'type': 'number', 'description': 'Starting latitude'},
+                    'from_lon': {'type': 'number', 'description': 'Starting longitude'},
+                    'to_lat': {'type': 'number', 'description': 'Destination latitude'},
+                    'to_lon': {'type': 'number', 'description': 'Destination longitude'},
+                    'profile': {'type': 'string', 'description': 'Routing profile: driving, cycling, walking (default: driving)'}
+                },
+                'required': ['from_lat', 'from_lon', 'to_lat', 'to_lon']
+            },
+            lambda args: self._geo_directions(args['from_lat'], args['from_lon'], args['to_lat'], args['to_lon'], args.get('profile', 'driving'))
+        )
+
+        self.register(
+            'geo_places',
+            'Query OpenStreetMap for nearby places, amenities, shops, restaurants, etc. '
+            'Uses Overpass API. Specify a location and what type of features to find.',
+            {
+                'type': 'object',
+                'properties': {
+                    'lat': {'type': 'number', 'description': 'Center latitude'},
+                    'lon': {'type': 'number', 'description': 'Center longitude'},
+                    'radius': {'type': 'integer', 'description': 'Search radius in meters (default 1000)'},
+                    'amenity': {'type': 'string', 'description': 'Type of place: restaurant, cafe, hospital, school, pharmacy, bank, police, fire_station, fuel, parking, atm, supermarket, etc.'},
+                    'limit': {'type': 'integer', 'description': 'Max results (default 20)'}
+                },
+                'required': ['lat', 'lon']
+            },
+            lambda args: self._geo_places(args['lat'], args['lon'], args.get('radius', 1000), args.get('amenity', ''), args.get('limit', 20))
+        )
 
     # ══════════════════════════════════════
     # MCP CLIENT TOOLS (v7.7)
@@ -4627,6 +4702,151 @@ class ToolRegistry:
                     f'Full path: {result["file"]}')
         except Exception as e:
             return self._se_connection_error(e)
+
+    # ── Geo Tools ────────────────────────────────────────
+
+    def _geo_search(self, query: str, limit: int = 5) -> str:
+        """Search for places using Nominatim API."""
+        import urllib.request, urllib.parse, urllib.error
+        try:
+            params = urllib.parse.urlencode({'q': query, 'format': 'json', 'limit': min(limit, 20), 'addressdetails': 1})
+            url = f'https://nominatim.openstreetmap.org/search?{params}'
+            req = urllib.request.Request(url, headers={'User-Agent': 'DeepSeekCLI/7.7', 'Accept-Language': 'en'})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            if not data:
+                return f'No results found for "{query}".'
+            lines = [f'Found {len(data)} result(s) for "{query}":']
+            for i, place in enumerate(data, 1):
+                name = place.get('display_name', 'Unknown')
+                lat = place.get('lat', '?')
+                lon = place.get('lon', '?')
+                osm_type = place.get('osm_type', '').upper() if place.get('osm_type') else ''
+                category = place.get('category', '')
+                ptype = place.get('type', '')
+                tags = f' [{osm_type}] {category}/{ptype}' if category else (f' [{osm_type}]' if osm_type else '')
+                lines.append(f'  {i}. {name}{tags}')
+                lines.append(f'     Lat: {lat}, Lon: {lon}')
+            return '\n'.join(lines)
+        except urllib.error.HTTPError as e:
+            return f'[ERROR] Nominatim HTTP {e.code}: {e.reason}'
+        except Exception as e:
+            return f'[ERROR] geo_search failed: {e}'
+
+    def _geo_reverse(self, lat: float, lon: float) -> str:
+        """Reverse geocode using Nominatim API."""
+        import urllib.request, urllib.parse, urllib.error
+        try:
+            params = urllib.parse.urlencode({'lat': lat, 'lon': lon, 'format': 'json', 'addressdetails': 1})
+            url = f'https://nominatim.openstreetmap.org/reverse?{params}'
+            req = urllib.request.Request(url, headers={'User-Agent': 'DeepSeekCLI/7.7', 'Accept-Language': 'en'})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            if 'error' in data:
+                return f'[ERROR] {data["error"]}'
+            addr = data.get('address', {})
+            display = data.get('display_name', 'Unknown')
+            parts = [
+                f'Address: {display}',
+                f'Coordinates: {data.get("lat", "?")}, {data.get("lon", "?")}',
+                f'OSM Type: {data.get("osm_type", "?").upper()}',
+            ]
+            addr_fields = ['house_number', 'road', 'city', 'town', 'village', 'state', 'country', 'postcode']
+            addr_lines = []
+            for field in addr_fields:
+                if field in addr:
+                    label = field.replace('_', ' ').title()
+                    addr_lines.append(f'  {label}: {addr[field]}')
+            if addr_lines:
+                parts.append('Address Details:')
+                parts.extend(addr_lines)
+            return '\n'.join(parts)
+        except urllib.error.HTTPError as e:
+            return f'[ERROR] Nominatim HTTP {e.code}: {e.reason}'
+        except Exception as e:
+            return f'[ERROR] geo_reverse failed: {e}'
+
+    def _geo_directions(self, from_lat: float, from_lon: float, to_lat: float, to_lon: float, profile: str = 'driving') -> str:
+        """Get directions using OSRM API."""
+        import urllib.request, urllib.parse, urllib.error
+        profile = profile if profile in ('driving', 'cycling', 'walking') else 'driving'
+        try:
+            url = f'https://router.project-osrm.org/route/v1/{profile}/{from_lon},{from_lat};{to_lon},{to_lat}?overview=full&steps=true&alternatives=false'
+            req = urllib.request.Request(url, headers={'User-Agent': 'DeepSeekCLI/7.7'})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode())
+            if data.get('code') != 'Ok' or not data.get('routes'):
+                return f'[ERROR] OSRM returned: {data.get("message", "No route found")}'
+            route = data['routes'][0]
+            dist_km = route['distance'] / 1000
+            duration_min = route['duration'] / 60
+            legs = route.get('legs', [])
+            parts = [
+                f'Route ({profile}):',
+                f'  Distance: {dist_km:.1f} km',
+                f'  Duration: {duration_min:.0f} min',
+            ]
+            if legs:
+                parts.append('  Steps:')
+                for leg in legs:
+                    for step in leg.get('steps', []):
+                        instruction = step.get('maneuver', {}).get('type', '').replace('_', ' ').title()
+                        modifier = step.get('maneuver', {}).get('modifier', '')
+                        name = step.get('name', '') or step.get('ref', '') or 'unnamed road'
+                        step_dist = step['distance']
+                        step_dur = step['duration']
+                        dir_str = f' ({modifier})' if modifier else ''
+                        parts.append(f'    {instruction}{dir_str} on {name} — {step_dist:.0f}m ({step_dur:.0f}s)')
+            return '\n'.join(parts)
+        except urllib.error.HTTPError as e:
+            return f'[ERROR] OSRM HTTP {e.code}: {e.reason}'
+        except Exception as e:
+            return f'[ERROR] geo_directions failed: {e}'
+
+    def _geo_places(self, lat: float, lon: float, radius: int = 1000, amenity: str = '', limit: int = 20) -> str:
+        """Query nearby places using Overpass API."""
+        import urllib.request, urllib.parse, urllib.error
+        try:
+            limit = min(limit, 50)
+            if amenity:
+                overpass_query = f'''
+                [out:json][timeout:15];
+                node(around:{radius},{lat},{lon})["amenity"="{amenity}"];
+                out {limit};
+                '''
+            else:
+                overpass_query = f'''
+                [out:json][timeout:15];
+                node(around:{radius},{lat},{lon})["amenity"];
+                out {limit};
+                '''
+            url = 'https://overpass-api.de/api/interpreter'
+            req = urllib.request.Request(url, data=urllib.parse.urlencode({'data': overpass_query}).encode(), headers={'User-Agent': 'DeepSeekCLI/7.7'})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode())
+            elements = data.get('elements', [])
+            if not elements:
+                label = f' with amenity="{amenity}"' if amenity else ''
+                return f'No places found within {radius}m of ({lat}, {lon}){label}.'
+            lines = [f'Found {len(elements)} place(s) near ({lat:.4f}, {lon:.4f}) within {radius}m:' if not amenity else f'Found {len(elements)} "{amenity}" near ({lat:.4f}, {lon:.4f}) within {radius}m:']
+            for i, place in enumerate(elements, 1):
+                tags = place.get('tags', {})
+                name = tags.get('name', amenity or 'Unnamed')
+                p_lat = place.get('lat', '?')
+                p_lon = place.get('lon', '?')
+                p_amenity = tags.get('amenity', '')
+                addr_parts = []
+                for k in ('housenumber', 'street', 'city'):
+                    if tags.get(k):
+                        addr_parts.append(tags[k])
+                addr_str = f' — {", ".join(addr_parts)}' if addr_parts else ''
+                lines.append(f'  {i}. {name}{addr_str}')
+                lines.append(f'     {p_amenity.title() if p_amenity else ""} at {p_lat}, {p_lon}')
+            return '\n'.join(lines)
+        except urllib.error.HTTPError as e:
+            return f'[ERROR] Overpass HTTP {e.code}: {e.reason}'
+        except Exception as e:
+            return f'[ERROR] geo_places failed: {e}'
 
     # ── Skill Helpers ─────────────────────────────────────
 
