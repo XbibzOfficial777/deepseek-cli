@@ -1,4 +1,4 @@
-# Python
+# ─── Python ───────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -6,17 +6,19 @@ __pycache__/
 build/
 dist/
 
-# Node / React / Vite
-dashboard-react/node_modules/
-dashboard-react/dist/
-dashboard-react/.wrangler/
+# ─── React / Vite / Dashboard ────────────────────────────────────
+# Dashboard is a separate Cloudflare Worker project — NOT part of the CLI repo.
+# Source kept locally; deploy via `cd dashboard-react && npx wrangler deploy`.
+dashboard-react/
+dashboard/
 dashboard-react/.vite/
+dashboard-react/.wrangler/
 
-# OS
+# ─── OS ────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Secrets (rotate before public commit)
+# ─── Secrets (NEVER commit) ───────────────────────────────────────
 *.env
 .env
 .env.local
@@ -24,6 +26,9 @@ Thumbs.db
 *.key
 secrets.json
 
-# Logs
+# ─── Editor / runtime ────────────────────────────────────────────
 *.log
 .tmp/
+.idea/
+.vscode/
+*.swp
