@@ -5,7 +5,7 @@
 [![deepseek-cli](https://imgbs.com/uploads/670312-c65bfd00.png)](https://deepseek-cli.pages.dev)
 
 [![Version](https://img.shields.io/badge/Version-7.7.0-00FFA3.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli)
-[![License](https://img.shields.io/badge/License-MIT-white.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-white.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli/blob/master/LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Termux-FF6F00.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli)
 [![Tools](https://img.shields.io/badge/Tools-120%2B-8A2BE2.svg?style=for-the-badge)](https://github.com/XbibzOfficial777/deepseek-cli)
@@ -58,7 +58,7 @@
 ### One-Line Installation
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/XbibzOfficial777/deepseek-cli/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/XbibzOfficial777/deepseek-cli/master/install.sh)"
 ```
 
 ### Manual Installation
