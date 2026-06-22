@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+
+# Node / React / Vite
+dashboard-react/node_modules/
+dashboard-react/dist/
+dashboard-react/.wrangler/
+dashboard-react/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (rotate before public commit)
+*.env
+.env
+.env.local
+*.pem
+*.key
+secrets.json
+
+# Logs
+*.log
+.tmp/

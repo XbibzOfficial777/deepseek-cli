@@ -1,0 +1,32 @@
+name = "deepseek-dash"
+main = "worker.js"
+compatibility_date = "2023-01-01"
+account_id = "dd443da5066f5764c2e962cc62364285"
+
+# Static assets served by the Worker (Vite build output)
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+not_found_handling = "single-page-application"
+
+# ── Public configuration (safe to commit) ────────────────────────
+[vars]
+GIST_ID              = "339448cf1b84118482f9af646f242791"
+REGISTRY_GIST_ID     = "55a91f3ee47f659d21a58a80826ca827"
+REGISTRY_FILENAME    = "endpoint.json"
+GIST_FILENAME        = "usage.json"
+FIREBASE_API_KEY     = "AIzaSyDfdWsO1H11PjSY7IecaX_QICc14yLOtpQ"
+FIREBASE_DB_URL      = "https://xbibzstorage-default-rtdb.asia-southeast1.firebasedatabase.app"
+FIREBASE_USERS_PATH  = "dscliUsers"
+
+# ── Secrets (NEVER commit) ───────────────────────────────────────
+# GITHUB_PAT    — set via:   wrangler secret put GITHUB_PAT
+# ADMIN_PASSCODE — set via:  wrangler secret put ADMIN_PASSCODE
+# These are intentionally NOT in this file. Set them with the
+# wrangler CLI after cloning. They live in Cloudflare's encrypted
+# secrets store, not in source control.
+#
+# Example:
+#   wrangler secret put GITHUB_PAT
+#   wrangler secret put ADMIN_PASSCODE
