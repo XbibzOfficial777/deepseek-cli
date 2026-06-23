@@ -14,6 +14,7 @@
 #    bash install.sh --uninstall              # Uninstall
 #    bash install.sh --clean                  # Deep clean (remove all + venv)
 #    bash install.sh --rebuild                # Recreate venv from scratch
+#    bash install.sh --no-animation           # Disable animations (pure text)
 #    DEEPSEEK_VENV_NAME=myenv bash install.sh  # Custom venv name
 #    DEEPSEEK_VENV_DIR=/custom bash install.sh  # Custom venv path
 #    bash -c "$(curl -fsSL RAW_URL)"           # Install via curl pipe
@@ -38,41 +39,45 @@ BL="\033[34m"; MG="\033[35m"
 # Arc rotate — 4-frame smooth rotating arc
 ARC_FRAMES=('◜' '◝' '◞' '◟')
 
-# Dots — classic loading spinner
+# Dots — classic loading spinner (fallback)
 DOT_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+
+# ═══════════════════════════════════════════════════════════════
+#  ARGUMENT PARSING
+# ═══════════════════════════════════════════════════════════════
+
+NO_ANIMATION=false
+case " ${0:-} ${1:-} ${*} " in
+    *\ --no-animation\ *) NO_ANIMATION=true ;;
+esac
+
+# ═══════════════════════════════════════════════════════════════
+#  TTY DETECTION — animations only on interactive terminals
+# ═══════════════════════════════════════════════════════════════
+
+# Detect if stderr is a TTY. If not (curl-piped, file, etc.), use
+# static text instead — escape sequences in non-TTY output create
+# ugly literal `\033[1m◜\033[0m` displays.
+IS_TTY=false
+if [ -t 2 ] && [ -z "${NO_ANIMATION:-}" ]; then
+    # Also check if terminal supports at least 256 colors
+    if command -v tput >/dev/null 2>&1; then
+        if [ "$(tput colors 2>/dev/null || echo 0)" -ge 256 ]; then
+            IS_TTY=true
+        fi
+    else
+        # No tput — assume yes if stderr is a TTY
+        IS_TTY=true
+    fi
+fi
 
 # ═══════════════════════════════════════════════════════════════
 #  ANIMATION ENGINE — pure bash, no python dependency
 # ═══════════════════════════════════════════════════════════════
 
-# ANSI 256-color grayscale range (232–255) for the flading text
-FLAD_MIN=232
-FLAD_MAX=255
-
-# Get the visible width of a string (strip ANSI codes)
-# Usage: vis_len "string"
-vis_len() {
-    local s="$*"
-    # Strip ANSI escape sequences (ESC[...m)
-    local stripped
-    stripped=$(printf '%s' "$s" | sed -r "s/\x1b\[[0-9;]*[mGKHJ]//g")
-    echo "${#stripped}"
-}
-
-# Pad a string to a given width with spaces
-# Usage: pad_str "string" width
-pad_str() {
-    local s="$1"
-    local width="$2"
-    local current
-    current=$(vis_len "$s")
-    local pad=$((width - current))
-    if [ "$pad" -gt 0 ]; then
-        printf '%s%*s' "$s" "$pad" ""
-    else
-        printf '%s' "$s"
-    fi
-}
+# Use simpler 16-color palette for cross-terminal compatibility
+# instead of 256-color grayscale (which can render oddly on some
+# terminals and gets garbled when piped to chat/logs).
 
 # Render the flading text gradient for a given phase
 # Usage: render_flading "text" phase
@@ -81,12 +86,13 @@ render_flading() {
     local phase="$2"
     local len=${#text}
     local out=""
+    # 5-color palette: dim gray → cyan → bright cyan → cyan → dim gray
+    local palette=("\033[2;37m" "\033[36m" "\033[1;36m" "\033[36m" "\033[2;37m")
     for ((j=0; j<len; j++)); do
-        # Each character has a phase offset; total phase drives the wave
-        local idx=$(( (j * 2 + phase) % 24 ))
-        local code=$((FLAD_MIN + idx))
+        local idx=$(( (j + phase) % 5 ))
+        local color="${palette[$idx]}"
         local ch="${text:$j:1}"
-        out+="\033[38;5;${code}m${ch}\033[0m"
+        out+="${color}${ch}${R}"
     done
     printf '%s' "$out"
 }
@@ -94,22 +100,22 @@ render_flading() {
 # Background animation loop — runs until ANIM_STOP file is removed
 # Usage: start_animation "label"
 start_animation() {
+    if ! $IS_TTY; then return; fi
     local label="$1"
     ANIM_LABEL="$label"
     ANIM_STOP_FILE=$(mktemp -u)
-    # Create the stop file
     touch "$ANIM_STOP_FILE"
 
     (
         local i=0
         while [ -f "$ANIM_STOP_FILE" ]; do
             local arc="${ARC_FRAMES[$((i % 4))]}"
-            # Build: "{arc_rotate} {flading_text label}"
-            local out="  ${B}${YE}${arc}${R}  "
+            # Build: "{arc_rotate} {flading_text label}" — smooth, low-noise
+            local out="  ${YE}${arc}${R}  "
             out+="$(render_flading "$ANIM_LABEL" "$i")"
-            # Clear to end of line so any leftover from previous writes is gone
+            # Use \r (carriage return) + \033[K (clear to EOL) for in-place update
             printf '\r%s\033[K' "$out" >&2
-            sleep 0.06
+            sleep 0.08
             i=$((i + 1))
         done
     ) &
@@ -127,8 +133,10 @@ stop_animation() {
         wait "$ANIM_PID" 2>/dev/null || true
         ANIM_PID=""
     fi
-    # Clear the animation line
-    printf '\r\033[K' >&2
+    # Clear the animation line (only on TTY)
+    if $IS_TTY; then
+        printf '\r\033[K' >&2
+    fi
 }
 
 # Run a command with the modern animation showing label during execution
@@ -138,12 +146,6 @@ run_animated() {
     shift
     local log
     log=$(mktemp)
-
-    # Run the animation in background
-    local saved_tty_settings=""
-    if [ -t 1 ]; then
-        saved_tty_settings=$(stty -g 2>/dev/null || echo "")
-    fi
 
     start_animation "$label"
 
