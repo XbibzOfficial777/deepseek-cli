@@ -52,23 +52,22 @@ case " ${0:-} ${1:-} ${*} " in
 esac
 
 # ═══════════════════════════════════════════════════════════════
-#  TTY DETECTION — animations only on interactive terminals
+#  TTY DETECTION — animation runs by default
 # ═══════════════════════════════════════════════════════════════
 
-# Detect if stderr is a TTY. If not (curl-piped, file, etc.), use
-# static text instead — escape sequences in non-TTY output create
-# ugly literal `\033[1m◜\033[0m` displays.
-IS_TTY=false
-if [ -t 2 ] && [ -z "${NO_ANIMATION:-}" ]; then
-    # Also check if terminal supports at least 256 colors
-    if command -v tput >/dev/null 2>&1; then
-        if [ "$(tput colors 2>/dev/null || echo 0)" -ge 256 ]; then
-            IS_TTY=true
-        fi
-    else
-        # No tput — assume yes if stderr is a TTY
-        IS_TTY=true
-    fi
+# Animation is ON by default. Disable only when:
+#   1. User passes --no-animation flag, OR
+#   2. BOTH stdout AND stderr are redirected (piped to file)
+#
+# Why this logic: when running `bash -c "$(curl ...)`, the subprocess
+# bash's stderr might be redirected even though the user sees a terminal.
+# Checking just `[ -t 2 ]` is too strict. Default to ON unless we have
+# strong evidence output is being captured.
+IS_TTY=true
+[ -n "${NO_ANIMATION:-}" ] && IS_TTY=false
+# Both stdout AND stderr not a TTY → output is being captured (piped/logged)
+if [ ! -t 1 ] && [ ! -t 2 ]; then
+    IS_TTY=false
 fi
 
 # ═══════════════════════════════════════════════════════════════
