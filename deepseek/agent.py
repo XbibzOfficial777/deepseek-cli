@@ -284,7 +284,17 @@ def safe_execute(func, args: dict, timeout: int = TOOL_TIMEOUT_DEFAULT,
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-        thread.join()  # No timeout - AI decides execution duration
+        
+        # Join with a polling mechanism to allow KeyboardInterrupt to be caught
+        # and to enforce timeout if specified
+        if timeout and timeout > 0:
+            thread.join(timeout)
+            if thread.is_alive():
+                return ToolResult.timeout(timeout, tool_name).to_str()
+        else:
+            # Infinite join, but use short timeouts to allow signals
+            while thread.is_alive():
+                thread.join(0.1)
 
         if not result_container['done']:
             last_result = ToolResult.fail('Execution failed unexpectedly', tool_name=tool_name)
@@ -832,6 +842,8 @@ class Agent:
         # Always send tools
         send_tools = self._tool_functions if self.provider.supports_tools else None
 
+        _tool_call_history = []  # track recent tool calls to prevent infinite loops
+
         for round_num in itertools.count(0):
             if SMART_MAX_ROUNDS > 0 and round_num >= SMART_MAX_ROUNDS:
                 break
@@ -1191,6 +1203,16 @@ class Agent:
                     fpath = args.get('path', '')
                     if fpath:
                         self.created_files.append(fpath)
+
+                _tool_call_history.append((tool_name, raw_args))
+
+            # Anti-stuck loop detection
+            if len(_tool_call_history) >= 4:
+                recent = _tool_call_history[-4:]
+                if all(c == recent[0] for c in recent):
+                    console.print(f'\n  [bold yellow]  [ANTI-STUCK] Same tool call repeated 4 times. Forcing stop.[/bold yellow]')
+                    stopped_by = 'anti_stuck'
+                    break
 
             console.print()
 

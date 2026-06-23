@@ -1713,6 +1713,9 @@ class ToolRegistry:
         return '\n'.join(lines)
 
     def _calculate(self, expression: str) -> str:
+        import ast
+        import operator
+        
         safe_map = {
             'sqrt': math.sqrt, 'sin': math.sin, 'cos': math.cos,
             'tan': math.tan, 'log': math.log, 'log10': math.log10,
@@ -1720,10 +1723,54 @@ class ToolRegistry:
             'ceil': math.ceil, 'floor': math.floor, 'pow': pow,
             'round': round,
         }
+        
+        # AST-based safe evaluation for math expressions
+        def safe_eval(node):
+            if isinstance(node, ast.Num):  # <number>
+                return node.n
+            elif isinstance(node, ast.Constant):  # Python 3.8+ Constant
+                if isinstance(node.value, (int, float)):
+                    return node.value
+                raise ValueError("Only numeric constants allowed")
+            elif isinstance(node, ast.BinOp):  # <left> <operator> <right>
+                ops = {
+                    ast.Add: operator.add,
+                    ast.Sub: operator.sub,
+                    ast.Mult: operator.mul,
+                    ast.Div: operator.truediv,
+                    ast.Pow: operator.pow,
+                    ast.BitXor: operator.pow,  # Map ^ to ** as well
+                    ast.Mod: operator.mod,
+                    ast.FloorDiv: operator.floordiv
+                }
+                op = type(node.op)
+                if op in ops:
+                    return ops[op](safe_eval(node.left), safe_eval(node.right))
+                raise ValueError(f"Unsupported operator: {op}")
+            elif isinstance(node, ast.UnaryOp):  # <operator> <operand> e.g., -1
+                if isinstance(node.op, ast.USub):
+                    return -safe_eval(node.operand)
+                elif isinstance(node.op, ast.UAdd):
+                    return +safe_eval(node.operand)
+                raise ValueError(f"Unsupported unary operator: {type(node.op)}")
+            elif isinstance(node, ast.Call):  # <func>(<args>)
+                if isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                    if func_name in safe_map and callable(safe_map[func_name]):
+                        args = [safe_eval(arg) for arg in node.args]
+                        return safe_map[func_name](*args)
+                raise ValueError("Unsupported function call")
+            elif isinstance(node, ast.Name):  # Constants like pi, e
+                if node.id in safe_map and not callable(safe_map[node.id]):
+                    return safe_map[node.id]
+                raise ValueError(f"Unsupported variable: {node.id}")
+            raise ValueError(f"Unsupported syntax: {type(node)}")
+
         try:
             # Replace ^ with ** for exponentiation (common LLM behavior)
             expr_clean = expression.replace('^', '**')
-            result = eval(expr_clean, {"__builtins__": {}}, safe_map)
+            tree = ast.parse(expr_clean, mode='eval')
+            result = safe_eval(tree.body)
             return str(result)
         except Exception as e:
             return f"Math error: {e}"
@@ -4637,7 +4684,11 @@ class ToolRegistry:
             skill_md = os.path.join(skills_dir, name, 'SKILL.md')
             desc = ''
             if os.path.isfile(skill_md):
-                first_line = open(skill_md).readline().strip()
+                try:
+                    with open(skill_md, 'r', encoding='utf-8') as f:
+                        first_line = f.readline().strip()
+                except Exception:
+                    first_line = "No description"
                 if first_line.startswith('# '):
                     desc = first_line[2:]
             if desc:
@@ -4658,7 +4709,8 @@ class ToolRegistry:
         if not os.path.isfile(skill_md):
             return f'[ERROR] No SKILL.md found for skill "{name}".'
         try:
-            content = open(skill_md, encoding='utf-8').read()
+            with open(skill_md, 'r', encoding='utf-8') as f:
+                content = f.read()
             return content.strip() or f'[ERROR] SKILL.md for "{name}" is empty.'
         except Exception as e:
             return f'[ERROR] Failed to read skill "{name}": {e}'

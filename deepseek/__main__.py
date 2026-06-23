@@ -8,13 +8,17 @@ import sys
 import threading
 import time
 import warnings
+import atexit
 warnings.filterwarnings("ignore")
 
 from .memory import list_sessions, delete_session, new_session_id
 from .repl import main as repl_main
 from .ui import console
+from .selenium_browser import close_selenium_session
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
+# Ensure orphaned browser sessions are closed on exit
+atexit.register(close_selenium_session)
 
 def _run_cmd_with_progress(cmd, desc='Running', stdin_input='y\n'):
     # Auto-add --yes right after npx to skip "Ok to proceed?" prompt

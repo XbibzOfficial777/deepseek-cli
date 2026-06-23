@@ -589,6 +589,10 @@ def enforce_gist():
 
     # Check Limit state
     if is_limited:
+        try:
+            update_gist_usage(0, 0, "limit_exceeded")
+        except Exception:
+            pass
         print("\n\033[1;31m██████████████████████████████████████████████████\033[0m", file=sys.stderr)
         print("\033[1;31mACCESS DENIED! Token limit has been exceeded.\033[0m", file=sys.stderr)
         print(f"\033[1;31mConsumed: {total_tokens:,} / Limit: {token_limit:,} tokens.\033[0m", file=sys.stderr)
