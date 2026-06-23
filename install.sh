@@ -488,10 +488,13 @@ else
     ok "Package verified: $VERIFY_OUT"
 fi
 
-# Sanity check: ensure no leftover 'Signed in as' (old removed line) in installed code
-if grep -rn "console.print.*Signed in as\|print.*Signed in as" "$INSTALL_DIR/deepseek" 2>/dev/null; then
-    warn "Stale code detected in install dir. The 'Signed in as' line was removed in v7.7."
-    warn "If you still see it after install, run:  bash install.sh --clean"
+# Sanity check: ensure no leftover ACTIVE 'Signed in as' print calls in installed
+# code. (Comments that mention the string are OK — only actual console.print/print
+# calls count.) The fix from commit 1816eb6 removed the line entirely.
+if grep -rnE "^\s*[^#]*console\.print.*Signed in as\b|^\s*[^#]*print\s*\(.*Signed in as" \
+    "$INSTALL_DIR/deepseek" 2>/dev/null | grep -v "^\s*#"; then
+    warn "Stale 'Signed in as' print call detected in installed code."
+    warn "If you still see 'Signed in as' at runtime, run:  bash install.sh --clean"
 fi
 
 # ═══════════════════════════════════════════════════════════════
