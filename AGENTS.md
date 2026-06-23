@@ -417,6 +417,11 @@ Worker needs env vars: `FIREBASE_API_KEY`, `FIREBASE_DB_URL`, `FIREBASE_USERS_PA
 > (registry `55a91f3e…`, live DB `339448cf…`) and PATCH-merges instead of
 > recreating. Never point the CLI default at a new registry Gist.
 
+### Auth & UI
+
+- **Admin Console (`/admin`)**: Passcode-gated dashboard to manage CLI users, see analytics, and execute admin actions (Ban/Limit).
+- **User Dashboard (`/account`)**: Firebase Auth integrated view (`AuthView`, `.uda-*` classes). Users can register/login, sync their username, and view their individual token usages. The UI uses modern glassmorphic designs with glow animations.
+
 ### Build & serve flow
 
 ```
