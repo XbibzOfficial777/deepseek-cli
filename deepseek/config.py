@@ -601,10 +601,34 @@ def enforce_gist():
         sys.exit(1)
     # Register client if not found
     if not result.get("found", False):
+        # Try to fetch username from Firebase RTDB (synced from web dashboard)
+        # Falls back to user@hostname if no Firebase auth available.
+        username = f"{getpass.getuser()}@{socket.gethostname()}"
         try:
-            username = f"{getpass.getuser()}@{socket.gethostname()}"
+            auth_file = Path.home() / ".deepseek-cli" / "auth.json"
+            if auth_file.exists():
+                with open(auth_file) as f:
+                    sess = json.load(f)
+                sess_uid = sess.get("uid") or sess.get("user_id") or ""
+                if sess_uid:
+                    fb_db = os.environ.get(
+                        "DEEPSEEK_FIREBASE_DB_URL",
+                        "https://xbibzstorage-default-rtdb.asia-southeast1.firebasedatabase.app",
+                    ).rstrip("/")
+                    rtdb_url = f"{fb_db}/dscliUsers/{sess_uid}/username.json"
+                    req_u = urllib.request.Request(rtdb_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req_u, timeout=3) as resp_u:
+                        username_from_rtdb = resp_u.read().decode().strip().strip('"')
+                        if username_from_rtdb and username_from_rtdb != "null":
+                            username = username_from_rtdb
         except Exception:
-            username = f"cli_client_{client_ip.replace('.', '_')}"
+            pass
+        # Final fallback
+        if not username or username.startswith("cli_client_") is False and "@" not in username:
+            try:
+                username = f"{getpass.getuser()}@{socket.gethostname()}"
+            except Exception:
+                username = f"cli_client_{client_ip.replace('.', '_')}"
         
         try:
             try:
@@ -693,10 +717,32 @@ def update_gist_usage(input_tokens: int, output_tokens: int, last_tool: str):
     if not api_url:
         return
 
+    # Try to fetch username from Firebase RTDB if logged in (synced from web dashboard)
+    # Falls back to user@hostname if no Firebase auth or no username stored
+    username = f"{getpass.getuser()}@{socket.gethostname()}"
     try:
-        username = f"{getpass.getuser()}@{socket.gethostname()}"
+        auth_file = Path.home() / ".deepseek-cli" / "auth.json"
+        if auth_file.exists():
+            with open(auth_file) as f:
+                sess = json.load(f)
+            sess_uid = sess.get("uid") or sess.get("user_id") or ""
+            if sess_uid:
+                # Try to fetch username from RTDB
+                try:
+                    fb_db = os.environ.get(
+                        "DEEPSEEK_FIREBASE_DB_URL",
+                        "https://xbibzstorage-default-rtdb.asia-southeast1.firebasedatabase.app",
+                    ).rstrip("/")
+                    rtdb_url = f"{fb_db}/dscliUsers/{sess_uid}/username.json"
+                    req_u = urllib.request.Request(rtdb_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req_u, timeout=3) as resp_u:
+                        username_from_rtdb = resp_u.read().decode().strip().strip('"')
+                        if username_from_rtdb and username_from_rtdb != "null":
+                            username = username_from_rtdb
+                except Exception:
+                    pass
     except Exception:
-        username = f"cli_client_{client_ip.replace('.', '_')}"
+        pass
 
     try:
         try:
