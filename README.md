@@ -510,7 +510,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 [![GitHub Forks](https://img.shields.io/github/forks/XbibzOfficial777/deepseek-cli?style=social)](https://github.com/XbibzOfficial777/deepseek-cli)
 
 ## Stargazers over time
-[![Stargazers over time](https://starchart.cc/XbibzOfficial777/deepseek-cli.svg?variant=adaptive)](https://starchart.cc/XbibzOfficial777/deepseek-cli)
+[![Star History Chart](https://api.star-history.com/svg?repos=XbibzOfficial777/deepseek-cli&type=Date)](https://star-history.com/#XbibzOfficial777/deepseek-cli&Date)
 
 [⬆ Back to Top](#-deepseek-cli-agent-v77)
 
