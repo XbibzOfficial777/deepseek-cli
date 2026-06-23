@@ -655,9 +655,8 @@ fi
 # Clear any cached bytecode
 find "$INSTALL_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-# Verify (using venv python so deps are available)
-VERIFY_OUT=$(run_animated "Verifying package..." \
-    "$VENV_PYTHON" -c "
+# Verify (run directly so output is visible — run_animated captures to log)
+VERIFY_OUT=$("$VENV_PYTHON" -c "
 import sys
 sys.path.insert(0, '$INSTALL_DIR')
 try:
@@ -665,13 +664,20 @@ try:
     from deepseek.agent import Agent
     from deepseek.toolkit import ToolRegistry
     t = ToolRegistry()
-    print(f'{len(t.tools)} tools')
+    print(f'{len(t.tools)} tools registered')
 except Exception as e:
-    print(f'Error: {e}')
+    import traceback
+    print(f'VERIFY ERROR: {e}')
+    traceback.print_exc()
 " 2>&1) || VERIFY_OUT=""
 
-if echo "$VERIFY_OUT" | grep -q "Error"; then
-    warn "Package verification: $VERIFY_OUT"
+if echo "$VERIFY_OUT" | grep -q "VERIFY ERROR"; then
+    err "Package verification FAILED:"
+    echo "$VERIFY_OUT" | sed 's/^/  /'
+    err "dscli will not work — try: bash install.sh --clean && bash install.sh"
+elif [ -z "$VERIFY_OUT" ]; then
+    err "Package verification returned empty — something is very wrong"
+    err "Check: $VENV_PYTHON -c 'import sys; sys.path.insert(0, \"$INSTALL_DIR\"); import deepseek'"
 else
     ok "Package verified: $VERIFY_OUT"
 fi
