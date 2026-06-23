@@ -173,16 +173,18 @@ deepseek-cli/
     │   ├── components/
     │   │   ├── AdminChip.tsx          # Admin session badge (header)
     │   │   ├── Charts.tsx             # Status + tool analytics
-    │   │   ├── CliUsersModal.tsx      # Firebase user management modal
+    │   │   ├── CliUsersModal.tsx      # Firebase user management modal + notify button
     │   │   ├── ConfirmModal.tsx       # Generic confirmation dialog
     │   │   ├── Drawer.tsx             # Right-side detail drawer
     │   │   ├── FilterBar.tsx          # Search + sort + status filter
     │   │   ├── LimitModal.tsx         # Token limit setter
     │   │   ├── LoginOverlay.tsx       # Passcode entry screen
+    │   │   ├── NotifyModal.tsx        # Admin notification composer
     │   │   ├── PasscodeModal.tsx      # Change admin passcode
     │   │   ├── StatsCards.tsx         # 4-card summary row
     │   │   ├── ThemeDots.tsx          # 4-theme switcher
     │   │   ├── Toast.tsx              # Toast context provider
+    │   │   ├── UserDashboard.tsx      # User /account page (Firebase Auth)
     │   │   ├── UserTable.tsx          # Main user table with actions
     │   │   └── VersionModal.tsx       # Registry version publisher
     │   └── assets/                    # Bundled images
@@ -448,6 +450,31 @@ dashboard-react/src/  ──[vite build]──▶  dashboard-react/dist/
 | POST | `/api/admin/version` | admin | Merge-only `latest_version` write |
 | GET | `/api/admin/users` | admin | List Firebase RTDB users |
 | POST | `/api/admin/user_action` | admin | ban / unban / delete user |
+| POST | `/api/admin/notify` | admin | Send in-app notification to a user by UID |
+
+### User notification endpoints (Firebase Bearer auth)
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/api/user/notifications` | user | List notifications + current status |
+| POST | `/api/user/notification_delete` | user | Delete a notification by ID |
+
+### Notification system
+
+**Admin → User notifications** flow:
+1. Admin opens **CLI Users** modal → clicks **Notify** on a user row.
+2. Fill title, message, severity (`info` / `warning` / `danger` / `success`).
+3. Worker writes to RTDB: `/dscliUsers/<target_uid>/notifications/<id>`.
+4. User's `/account` dashboard fetches notifications via `GET /api/user/notifications`.
+5. User can **delete** any notification (including auto-generated status alerts) via `POST /api/user/notification_delete`.
+
+**Status alerts (ban / limit)** are also surfaced in the user dashboard as a dismissible banner above the header. When dismissed, the banner is hidden for the session. The underlying status data comes from the Gist usage records, so a banned user will still see the alert on next refresh unless the ban is lifted.
+
+UI/UX choices:
+- Notifications use **left-border color coding** per severity (blue / yellow / red / green).
+- Each notification row has a **hover-reveal trash button** to keep the UI clean.
+- Empty state uses a centered **Inbox icon** with subtle opacity — never a plain text string.
+- The user header card is **glassmorphic** with a soft gradient border and avatar icon, displaying the synced username prominently.
 
 ### Worker env vars (`wrangler.toml [vars]`)
 

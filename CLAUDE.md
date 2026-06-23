@@ -133,6 +133,13 @@ longer in the repo. Edit `src/*` for UI changes, `worker.js` for backend,
 - [ ] No new duplicate Gists created
 - [ ] No secrets in diff
 
+## Notification system (v7.7+)
+
+- **Admin** sends notifications via `POST /api/admin/notify` (target UID, title, message, severity).
+- **User** receives them in `/account` → Notifications card, can delete each item.
+- **Status alerts** (ban / limit) appear as a dismissible banner at the top of the user dashboard.
+- New components: `NotifyModal.tsx`, updated `CliUsersModal.tsx` (Notify button per row), `UserDashboard.tsx` (delete + empty state + glass header).
+
 ## Common pitfalls
 
 | Symptom | Cause | Fix |
