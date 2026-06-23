@@ -328,35 +328,102 @@ fi
 if ! $LOCAL_SOURCE; then
     # Download from GitHub — handles: curl pipe, wget pipe, no local source
     GITHUB_RAW="${GITHUB_RAW_URL:-https://raw.githubusercontent.com/XbibzOfficial777/deepseek-cli/main}"
+    GITHUB_API="${GITHUB_API_URL:-https://api.github.com/repos/XbibzOfficial777/deepseek-cli/contents/deepseek?ref=main}"
     info "Downloading from GitHub: $GITHUB_RAW"
 
     TEMP_DIR=$(mktemp -d)
     mkdir -p "$TEMP_DIR/deepseek"
 
-    FILES=(
-        "deepseek/__init__.py"
-        "deepseek/__main__.py"
-        "deepseek/llm.py"
-        "deepseek/config.py"
-        "deepseek/providers.py"
-        "deepseek/agent.py"
-        "deepseek/toolkit.py"
-        "deepseek/memory.py"
-        "deepseek/ui.py"
-        "deepseek/repl.py"
-        "deepseek/mcp_tools.py"
-        "deepseek/mcp_client.py"
-        "deepseek/multi_agent.py"
-        "deepseek/doc_tools.py"
-        "deepseek/webcontrol.py"
-        "deepseek/selenium_browser.py"
-        "deepseek/connectors.py"
-        "deepseek/planner.py"
-        "deepseek/tools.py"
-        "requirements.txt"
-    )
+    # ── File list: AUTO-DETECT via GitHub API (preferred) ──────────────
+    # Falls back to a hardcoded list (kept in sync with the repo) if the
+    # API is rate-limited or unreachable. This is the only way to guarantee
+    # no file gets missed (the original bug: auth.py was missing).
+    FILES=()
+    AUTO_DETECTED=false
+    if command -v curl >/dev/null 2>&1; then
+        API_RESP=$(curl -fsSL --max-time 10 \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "User-Agent: deepseek-cli-installer" \
+            "$GITHUB_API" 2>/dev/null || true)
+        if [ -n "$API_RESP" ] && echo "$API_RESP" | grep -q '"name"'; then
+            # Parse JSON — use python if available, otherwise regex
+            if command -v python3 >/dev/null 2>&1; then
+                PY_NAMES=$(printf '%s' "$API_RESP" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for item in data:
+        if isinstance(item, dict) and item.get('type') == 'file':
+            n = item.get('name', '')
+            if n.endswith('.py'):
+                print('deepseek/' + n)
+except Exception:
+    pass
+" 2>/dev/null || true)
+            elif command -v python >/dev/null 2>&1; then
+                PY_NAMES=$(printf '%s' "$API_RESP" | python -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    for item in data:
+        if isinstance(item, dict) and item.get('type') == 'file':
+            n = item.get('name', '')
+            if n.endswith('.py'):
+                print('deepseek/' + n)
+except Exception:
+    pass
+" 2>/dev/null || true)
+            else
+                # Pure-sh fallback: extract "name":"X.py" pairs
+                PY_NAMES=$(printf '%s' "$API_RESP" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+\.py"' | sed -n 's/"name"[[:space:]]*:[[:space:]]*"\([^"]*\)"/deepseek\/\1/p')
+            fi
+            if [ -n "$PY_NAMES" ]; then
+                while IFS= read -r f; do
+                    [ -n "$f" ] && FILES+=("$f")
+                done <<< "$PY_NAMES"
+                if [ "${#FILES[@]}" -ge 10 ]; then
+                    AUTO_DETECTED=true
+                    # Always include requirements.txt (not in deepseek/ dir)
+                    FILES+=("requirements.txt")
+                fi
+            fi
+        fi
+    fi
+
+    if ! $AUTO_DETECTED; then
+        # ── Fallback hardcoded list — must stay in sync with repo ──────
+        # Kept as defensive backup so install still works when GitHub API
+        # is rate-limited (60 req/h unauthenticated).
+        warn "GitHub API auto-detect failed — using hardcoded file list"
+        FILES=(
+            "deepseek/__init__.py"
+            "deepseek/__main__.py"
+            "deepseek/agent.py"
+            "deepseek/auth.py"
+            "deepseek/config.py"
+            "deepseek/connectors.py"
+            "deepseek/doc_tools.py"
+            "deepseek/llm.py"
+            "deepseek/mcp_client.py"
+            "deepseek/mcp_tools.py"
+            "deepseek/memory.py"
+            "deepseek/multi_agent.py"
+            "deepseek/planner.py"
+            "deepseek/providers.py"
+            "deepseek/repl.py"
+            "deepseek/selenium_browser.py"
+            "deepseek/toolkit.py"
+            "deepseek/tools.py"
+            "deepseek/ui.py"
+            "deepseek/webcontrol.py"
+            "requirements.txt"
+        )
+    fi
+
+    info "File list: ${#FILES[@]} files$($AUTO_DETECTED && echo ' (auto)' || echo ' (fallback)')"
 
     DOWNLOADED=0
+    FAILED_FILES=()
     for f in "${FILES[@]}"; do
         url="${GITHUB_RAW}/${f}"
         if curl -fsSL "$url" -o "$TEMP_DIR/$f" 2>/dev/null; then
@@ -364,10 +431,12 @@ if ! $LOCAL_SOURCE; then
         elif wget -qO "$TEMP_DIR/$f" "$url" 2>/dev/null; then
             DOWNLOADED=$((DOWNLOADED + 1))
         else
+            FAILED_FILES+=("$f")
             warn "Failed: $f"
         fi
     done
 
+    # Hard fail if we got fewer than 10 files — something is very wrong.
     if [ $DOWNLOADED -lt 10 ]; then
         err "Download failed ($DOWNLOADED/$(( ${#FILES[@]} )) files)"
         echo -e "${D}  Make sure the GitHub repo has all files in main branch${R}"
@@ -376,10 +445,22 @@ if ! $LOCAL_SOURCE; then
         exit 1
     fi
 
-    cp -r "$TEMP_DIR/deepseek" "$INSTALL_DIR/"
+    # CRITICAL: wipe the destination first so stale .py files don't linger.
+    # `cp -r` only overwrites — it does NOT delete files absent from source.
+    # This was the root cause of the "Signed in as Xbibzzz" bug: the old
+    # auth.py from a previous install was never deleted because the
+    # installer didn't fetch a new one.
+    rm -rf "$INSTALL_DIR/deepseek" 2>/dev/null || true
+    find "$INSTALL_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+    mkdir -p "$INSTALL_DIR/deepseek"
+    cp -r "$TEMP_DIR/deepseek/." "$INSTALL_DIR/deepseek/"
     cp "$TEMP_DIR/requirements.txt" "$INSTALL_DIR/" 2>/dev/null || true
     rm -rf "$TEMP_DIR"
     ok "Downloaded $DOWNLOADED files"
+    if [ ${#FAILED_FILES[@]} -gt 0 ]; then
+        warn "Some files failed: ${FAILED_FILES[*]}"
+    fi
 fi
 
 # Clear any cached bytecode that could shadow the new source
