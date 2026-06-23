@@ -47,8 +47,10 @@ DOT_FRAMES=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
 # ═══════════════════════════════════════════════════════════════
 
 NO_ANIMATION=false
+INSTALL_OPTIONAL=false
 case " ${0:-} ${1:-} ${*} " in
     *\ --no-animation\ *) NO_ANIMATION=true ;;
+    *\ --with-optional\ *) INSTALL_OPTIONAL=true ;;
 esac
 
 # ═══════════════════════════════════════════════════════════════
@@ -496,33 +498,42 @@ done
 if [ ${#MISSING_CORE[@]} -gt 0 ]; then
     info "Installing core: ${MISSING_CORE[*]}"
     if ! run_animated "Installing core dependencies..." \
-        "$VENV_PIP" install --quiet "${MISSING_CORE[@]}" 2>/dev/null; then
-        err "Failed to install core dependencies"
-        exit 1
+        timeout 90 "$VENV_PIP" install "${MISSING_CORE[@]}" 2>&1; then
+        warn "Core deps install had issues — trying again with --quiet"
+        "$VENV_PIP" install --quiet "${MISSING_CORE[@]}" 2>/dev/null || \
+            err "Failed to install core dependencies" && exit 1
     fi
     ok "Core dependencies installed"
 else
     ok "All core dependencies already installed"
 fi
 
-# Check optional deps
-MISSING_OPT=()
-for dep in "${OPT_DEPS[@]}"; do
-    if ! "$VENV_PYTHON" -c "import $dep" 2>/dev/null; then
-        MISSING_OPT+=("$dep")
-    fi
-done
-
-if [ ${#MISSING_OPT[@]} -gt 0 ]; then
-    info "Installing optional: ${MISSING_OPT[*]}"
-    run_animated "Installing optional dependencies..." \
-        "$VENV_PIP" install --quiet "${MISSING_OPT[@]}" 2>/dev/null || \
-        warn "Some optional tools failed to install (non-fatal)"
-    if [ ${#MISSING_OPT[@]} -gt 0 ]; then
-        ok "Optional dependencies installed"
-    fi
+# Optional deps — only installed if --with-optional flag (or always installed)
+# By default: SKIP. These are heavy packages (selenium, mcp, pytesseract, etc.)
+# that often have network/build issues and slow down install.
+if ! $INSTALL_OPTIONAL; then
+    info "Skipping 13 optional tools (use --with-optional to install)"
+    info "Optional: PyPDF2 reportlab python-docx Pillow beautifulsoup4 mcp pydantic pytesseract selenium openpyxl python-pptx webdriver-manager"
 else
-    ok "All optional dependencies already installed"
+    # Check optional deps
+    MISSING_OPT=()
+    for dep in "${OPT_DEPS[@]}"; do
+        if ! "$VENV_PYTHON" -c "import $dep" 2>/dev/null; then
+            MISSING_OPT+=("$dep")
+        fi
+    done
+
+    if [ ${#MISSING_OPT[@]} -gt 0 ]; then
+        info "Installing optional: ${MISSING_OPT[*]}"
+        # NO --quiet so user sees progress (no "stuck" feeling)
+        if ! run_animated "Installing optional dependencies..." \
+            timeout 300 "$VENV_PIP" install "${MISSING_OPT[@]}" 2>&1; then
+            warn "Some optional tools failed (non-fatal — dscli will still work)"
+        fi
+        ok "Optional dependencies installed (or skipped if failed)"
+    else
+        ok "All optional dependencies already installed"
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════
