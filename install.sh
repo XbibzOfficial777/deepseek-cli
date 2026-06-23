@@ -8,6 +8,7 @@
 #  Usage:
 #    bash install.sh                         # Install
 #    bash install.sh --uninstall             # Uninstall
+#    bash install.sh --clean                 # Deep clean (remove all stale code)
 #    bash -c "$(curl -fsSL RAW_URL)"         # Install via curl pipe
 #    bash -c "$(curl -fsSL RAW_URL)" --uninstall  # Uninstall via curl pipe
 #
@@ -52,8 +53,10 @@ echo ""
 # ═══════════════════════════════════════════════════════════════
 
 UNINSTALL_MODE=false
+CLEAN_MODE=false
 case " ${0:-} ${1:-} ${*} " in
     *\ --uninstall\ *|*\ uninstall\ *) UNINSTALL_MODE=true ;;
+    *\ --clean\ *) CLEAN_MODE=true ;;
 esac
 if $UNINSTALL_MODE; then
     echo -e "${YE}${B}  ╔══════════════════════════════════════════╗${R}"
@@ -124,6 +127,25 @@ if $UNINSTALL_MODE; then
     # 7. Remove any stray cache/history files
     rm -f "$HOME/.deepseek-cli-history" 2>/dev/null || true
 
+    # ── CLEAN MODE: also remove any pip-installed deepseek package ──
+    if $CLEAN_MODE; then
+        echo ""
+        echo -e "  ${YE}${B}--clean mode: removing ALL stale installations${R}"
+        if command -v pip3 &>/dev/null; then
+            pip3 uninstall -y deepseek-cli deepseek-cli-agent deepseek 2>/dev/null | grep -E "Successfully|Skipping|not installed" || true
+        elif command -v pip &>/dev/null; then
+            pip uninstall -y deepseek-cli deepseek-cli-agent deepseek 2>/dev/null | grep -E "Successfully|Skipping|not installed" || true
+        fi
+        # Find any rogue deepseek packages in site-packages
+        for sp in $($PYTHON -c "import site; print('\n'.join(site.getsitepackages()))" 2>/dev/null) /usr/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages; do
+            if [ -d "$sp/deepseek" ]; then
+                echo -e "  ${CY}▸${R} Removing pip package: ${D}$sp/deepseek${R}"
+                rm -rf "$sp/deepseek" 2>/dev/null || true
+                FOUND=true
+            fi
+        done
+    fi
+
     echo ""
     if $FOUND; then
         echo -e "  ${GR}${B}✓ DeepSeek CLI has been uninstalled.${R}"
@@ -132,6 +154,11 @@ if $UNINSTALL_MODE; then
         echo -e "  ${YE}DeepSeek CLI is not installed or already removed.${R}"
     fi
     echo -e "  ${D}Run 'bash install.sh' to reinstall anytime.${R}"
+    echo ""
+    echo -e "  ${YE}${B}⚠ If you still see 'Signed in as' (old code), run:${R}"
+    echo -e "  ${D}    bash install.sh --clean${R}"
+    echo -e "  ${D}    hash -r${R}"
+    echo -e "  ${D}    exec \$SHELL${R}"
     echo ""
     exit 0
 fi
@@ -291,6 +318,8 @@ if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/deepseek" ] && [ -f "$SCRIPT_DIR/de
     LOCAL_SOURCE=true
     info "Installing from local source..."
     rm -rf "$INSTALL_DIR/deepseek" 2>/dev/null || true
+    # Clear any cached bytecode that could shadow the new source
+    find "$INSTALL_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     cp -r "$SCRIPT_DIR/deepseek" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/" 2>/dev/null || true
     ok "Moved from $SCRIPT_DIR"
@@ -353,6 +382,9 @@ if ! $LOCAL_SOURCE; then
     ok "Downloaded $DOWNLOADED files"
 fi
 
+# Clear any cached bytecode that could shadow the new source
+find "$INSTALL_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
 # Verify
 VERIFY_OK=false
 VERIFY_OUT=$($PYTHON -c "
@@ -373,6 +405,12 @@ if echo "$VERIFY_OUT" | grep -q "Error"; then
     warn "Package verification: $VERIFY_OUT"
 else
     ok "Package verified: $VERIFY_OUT"
+fi
+
+# Sanity check: ensure no leftover 'Signed in as' (old removed line) in installed code
+if grep -rn "console.print.*Signed in as\|print.*Signed in as" "$INSTALL_DIR/deepseek" 2>/dev/null; then
+    warn "Stale code detected in install dir. The 'Signed in as' line was removed in v7.7."
+    warn "If you still see it after install, run:  bash install.sh --clean"
 fi
 
 # ═══════════════════════════════════════════════════════════════
