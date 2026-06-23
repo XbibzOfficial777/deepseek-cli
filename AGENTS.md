@@ -1,7 +1,7 @@
 # DeepSeek CLI Agent — Repository Guide (v7.7)
 
 > **Panduan lengkap** untuk kontributor, AI agents (Claude/Codex/GPT), dan maintainer
-> yang bekerja di repo ini. Versi: **v7.7** · Update: 2026-06-22
+> yang bekerja di repo ini. Versi: **v7.7** · Update: 2026-06-23
 
 ---
 
@@ -29,7 +29,8 @@
 
 **DeepSeek CLI** (`dscli`) adalah **autonomous terminal AI agent** yang berjalan secara
 **agentic loop**: menerima intent user → reasoning → eksekusi tools → observasi hasil →
-loop sampai selesai.
+loop sampai selesai. Pasangannya adalah **Cloudflare Worker dashboard** (`dashboard-react/`)
+yang menampilkan data usage + manajemen user secara real-time.
 
 ### Arsitektur 3-Layer
 
@@ -38,7 +39,7 @@ loop sampai selesai.
 │  Layer 1 — User Interface (REPL)                                  │
 │  • Input: prompt + slash commands + raw key bindings              │
 │  • Output: streaming rich markdown (think + content + tools)      │
-│  • File: deepseek/repl.py (2186 lines)                             │
+│  • File: deepseek/repl.py (2186 lines)                            │
 ├──────────────────────────────────────────────────────────────────┤
 │  Layer 2 — Agent Engine (the brain)                                │
 │  • agent.py: agentic loop, AntiStuckDetector, metrics             │
@@ -111,7 +112,8 @@ loop back to User prompt
 | **Two-Gist split** | Registry Gist (public) + Usage Gist (private) — clear separation |
 | **Merge-only registry writes** | Avoid "tertumpuk" duplicate Gists when admin POSTs version |
 | **Pydantic v1 + v2 compat** | `.dict()` + `.model_dump()` — works with both versions |
-| **`__HTML_B64__` template** | Self-contained worker — no external assets to fetch |
+| **React + Vite SPA** | Dashboard built with React + TypeScript; built into `./dist/` and served via Cloudflare Worker `[assets]` binding |
+| **`/api/admin/data` polled** | Dashboard polls every 15s (configurable 5/15/30s) for near-real-time without WebSocket complexity |
 
 ---
 
@@ -152,33 +154,51 @@ deepseek-cli/
 │   ├── llm.py                         # 3 lines — backward-compat shim
 │   └── tools.py                       # 15 lines — DEPRECATED shim ⚠️
 │
-└── dashboard/                         # Cloudflare Worker project
-    ├── index.html                     # 727 lines — embedded into worker
-    ├── assets/
-    │   └── index.js                   # 1099 lines — vanilla JS dashboard
-    ├── worker.js                      # 200 lines — Cloudflare Worker handler
-    ├── worker.js.template             # same as worker.js (deploy source)
-    ├── wrangler.toml                  # CF Worker config + secrets (⚠️ gitignored)
-    ├── package.json                   # vite/react deps (NOT used for deploy)
-    ├── package-lock.json
-    ├── vite.config.js                 # legacy (not used in deploy)
-    ├── postcss.config.js              # legacy (not used in deploy)
-    ├── styles.css                     # legacy (not used in deploy)
-    ├── schema_example.json            # mock data for gist_enforcer tests
-    ├── gist_enforcer.py               # standalone test/demo script
-    ├── app.js                         # legacy (NOT served)
-    ├── src/                           # legacy React Native Web source (NOT served)
-    │   ├── App.jsx
-    │   └── main.jsx
-    └── dist/                          # vite build output (legacy, NOT served)
-        ├── index.html
-        └── assets/index.js
+└── dashboard-react/                   # Cloudflare Worker + React SPA (gitignored root)
+    ├── public/                        # Static assets served as-is
+    │   ├── favicon.svg
+    │   └── icons.svg
+    ├── src/
+    │   ├── main.tsx                   # React entrypoint
+    │   ├── App.tsx                    # 531 lines — main dashboard shell
+    │   ├── App.css                    # legacy styles (deprecated)
+    │   ├── index.css                  # legacy styles (deprecated)
+    │   ├── api/client.ts              # API helpers (passcode header, fetch)
+    │   ├── hooks/useDashboardData.ts  # TanStack Query hooks
+    │   ├── lib/types.ts               # TypeScript types matching Worker API
+    │   ├── lib/format.ts              # Number, time, admin-id helpers
+    │   ├── lib/theme.ts               # 4 theme presets (blue/violet/emerald/rose)
+    │   ├── lib/themeVars.ts           # CSS variable application
+    │   ├── styles/globals.css         # 541 lines — the actual stylesheet
+    │   ├── components/
+    │   │   ├── AdminChip.tsx          # Admin session badge (header)
+    │   │   ├── Charts.tsx             # Status + tool analytics
+    │   │   ├── CliUsersModal.tsx      # Firebase user management modal
+    │   │   ├── ConfirmModal.tsx       # Generic confirmation dialog
+    │   │   ├── Drawer.tsx             # Right-side detail drawer
+    │   │   ├── FilterBar.tsx          # Search + sort + status filter
+    │   │   ├── LimitModal.tsx         # Token limit setter
+    │   │   ├── LoginOverlay.tsx       # Passcode entry screen
+    │   │   ├── PasscodeModal.tsx      # Change admin passcode
+    │   │   ├── StatsCards.tsx         # 4-card summary row
+    │   │   ├── ThemeDots.tsx          # 4-theme switcher
+    │   │   ├── Toast.tsx              # Toast context provider
+    │   │   ├── UserTable.tsx          # Main user table with actions
+    │   │   └── VersionModal.tsx       # Registry version publisher
+    │   └── assets/                    # Bundled images
+    ├── worker.js                      # 510 lines — Cloudflare Worker handler
+    ├── wrangler.toml                  # CF Worker config (secrets not committed)
+    ├── package.json                   # React/Vite deps + wrangler (dev)
+    ├── vite.config.ts                 # Vite build config
+    ├── tsconfig*.json                 # TypeScript configs
+    ├── eslint.config.js               # ESLint flat config
+    └── dist/                          # vite build output → deployed via [assets]
 ```
 
-> ⚠️ **The deployed dashboard** is the **vanilla JS** built from
-> `dashboard/index.html` + `dashboard/assets/index.js` — embedded as base64 in
-> `worker.js` by the deploy script. The `src/App.jsx`, `dist/`, and `package.json`
-> are **legacy artifacts** and not what gets served.
+> ⚠️ **The deployed dashboard** is the **React SPA** built from `dashboard-react/src/`
+> into `dashboard-react/dist/`. Cloudflare Worker serves it via the `[assets]` binding
+> in `wrangler.toml`. `worker.js` handles both static asset routing AND all `/api/*`
+> endpoints in a single fetch handler.
 
 ---
 
@@ -194,7 +214,7 @@ CLI (dscli)                              Dashboard Browser
    │    ip, username,                          │
    │    input_tokens, output_tokens,           │
    │    last_tool, status, version,            │
-   │    hostname, platform, arch, ...           │
+   │    hostname, platform, arch, ...          │
    │  }                                        │
    │ ────────────────────────────────────────▶ │
    │                                           │
@@ -293,8 +313,8 @@ Both fixed:
 |----------|-------|---------|
 | `deepseek/config.py` | `CLIENT_VERSION = "7.7"` | The version baked into this build |
 | Registry Gist `55a91f3e…` | `endpoint.json → latest_version` | Authoritative "current latest" |
-| `dashboard/worker.js` | `/api/version` GET (public) | Reads registry, returns `{latest_version, api_url}` |
-| `dashboard/worker.js` | `/api/admin/version` POST | Merge-only write of `latest_version` |
+| `dashboard-react/worker.js` | `/api/version` GET (public) | Reads registry, returns `{latest_version, api_url}` |
+| `dashboard-react/worker.js` | `/api/admin/version` POST | Merge-only write of `latest_version` |
 | `deepseek/install.sh` | hardcoded v7.7 strings | Banner text in installer |
 
 ### Version bump checklist
@@ -349,6 +369,11 @@ The Worker exposes (admin-only):
 
 UI: header **"CLI Users"** button → modal with search + ban/delete actions.
 
+**For advanced ban/unban** (Firebase Auth-level disable), the Worker can use a
+**Firebase Service Account** (set as `FIREBASE_SERVICE_ACCOUNT` secret in
+`wrangler.toml`). Without it, only RTDB-level ban flag is set; with it, the user
+is also disabled in Firebase Auth.
+
 Worker needs env vars: `FIREBASE_API_KEY`, `FIREBASE_DB_URL`, `FIREBASE_USERS_PATH`.
 
 ### Firebase project
@@ -373,10 +398,10 @@ Worker needs env vars: `FIREBASE_API_KEY`, `FIREBASE_DB_URL`, `FIREBASE_USERS_PA
 
 ### Stack
 
-- **Frontend**: vanilla HTML + JS (no React, no build step)
-- **Backend**: Cloudflare Workers (ES module handler)
+- **Frontend**: React 19 + TypeScript + Vite 8 (SPA, built to `dist/`)
+- **Backend**: Cloudflare Workers (single `worker.js` fetch handler, ES modules)
 - **Storage**: two GitHub Gists
-- **Auth**: passcode (header `X-Admin-Passcode`)
+- **Auth**: passcode (header `X-Admin-Passcode`); optional Firebase Admin (service account)
 
 ### Gist contract
 
@@ -388,10 +413,21 @@ Worker needs env vars: `FIREBASE_API_KEY`, `FIREBASE_DB_URL`, `FIREBASE_USERS_PA
 
 > ⚠️ **"Tertumpuk" footgun (FIXED):** the original deploy script called
 > `create_gist()` on every run, spawning dozens of duplicate registry + DB
-> Gists. The deploy is now **idempotent**: it reuses `EXISTING_DB_GIST_ID` /
-> `EXISTING_REGISTRY_GIST_ID` and PATCH-merges instead of recreating.
-> **Canonical IDs:** registry `55a91f3e…`, live DB `339448cf…`. Never point
-> the CLI default at a new registry Gist.
+> Gists. The deploy is now **idempotent**: it reuses the canonical Gist IDs
+> (registry `55a91f3e…`, live DB `339448cf…`) and PATCH-merges instead of
+> recreating. Never point the CLI default at a new registry Gist.
+
+### Build & serve flow
+
+```
+dashboard-react/src/  ──[vite build]──▶  dashboard-react/dist/
+                                                  │
+                                                  ▼
+                                  Cloudflare Worker [assets] binding
+                                  (serves /, /assets/*, SPA fallback)
+                                                  +
+                                  worker.js handles /api/* endpoints
+```
 
 ### API surface
 
@@ -408,15 +444,25 @@ Worker needs env vars: `FIREBASE_API_KEY`, `FIREBASE_DB_URL`, `FIREBASE_USERS_PA
 | GET | `/api/admin/users` | admin | List Firebase RTDB users |
 | POST | `/api/admin/user_action` | admin | ban / unban / delete user |
 
-### Worker template placeholders
+### Worker env vars (`wrangler.toml [vars]`)
 
-The `worker.js` file contains 3 base64 placeholders, replaced by the deploy script:
+| Variable | Purpose |
+|----------|---------|
+| `GIST_ID` | Private DB Gist ID (usage + secrets) |
+| `REGISTRY_GIST_ID` | Public registry Gist ID |
+| `REGISTRY_FILENAME` | Default `endpoint.json` |
+| `GIST_FILENAME` | Default `usage.json` |
+| `FIREBASE_API_KEY` | Firebase web API key (public) |
+| `FIREBASE_DB_URL` | Firebase RTDB URL |
+| `FIREBASE_USERS_PATH` | Default `dscliUsers` |
 
-| Placeholder | Source file | Description |
-|-------------|-------------|-------------|
-| `__HTML_B64__` | `dashboard/index.html` | The dashboard HTML |
-| `__JS_B64__` | `dashboard/assets/index.js` | The dashboard JS |
-| `__404_B64__` | (inline) | The 404 fallback page |
+### Worker secrets (`wrangler secret put`)
+
+| Secret | Required? | Purpose |
+|--------|-----------|---------|
+| `GITHUB_PAT` | **Yes** | Read+write the Gists (no GitHub login otherwise) |
+| `ADMIN_PASSCODE` | **Yes** | Gate for `/api/admin/*` endpoints |
+| `FIREBASE_SERVICE_ACCOUNT` | Optional | JSON service account for Firebase Admin (Auth-level ban/delete) |
 
 ---
 
@@ -496,7 +542,7 @@ deepseek/mcp_client.py
 /mcp connect context7    # Connect to Context7
 /mcp connect canva       # Connect to Canva (asks for API key)
 /mcp status              # Show connected servers
-/mcp disconnect context7 # Disconnect
+/mcp disconnect context7  # Disconnect
 ```
 
 Connected MCP servers auto-register their tools into the agent's toolset.
@@ -622,21 +668,34 @@ python -m deepseek                    # run from source
 bash install.sh                       # install (venv + dscli wrapper)
 ```
 
-### Dashboard
+### Dashboard (React SPA + Worker)
 
 ```bash
-# In dashboard/ directory:
-npm install                           # one-time (for types only — actual deploy doesn't need)
+cd dashboard-react
+npm install                           # one-time
+npm run build                         # → ./dist/ (SPA)
 npx wrangler deploy --compatibility-date=2023-01-01
 ```
 
-The deploy embeds `dashboard/index.html` + `dashboard/assets/index.js` as base64
-into `worker.js`, replacing the `__HTML_B64__` / `__JS_B64__` / `__404_B64__`
-placeholders.
+The deploy:
+1. Compiles React + TS into `./dist/` (single-page app, hashed assets).
+2. Uploads `worker.js` + `./dist/` to Cloudflare Workers.
+3. Worker uses `[assets]` binding in `wrangler.toml` to serve static files
+   AND handles all `/api/*` endpoints in the same fetch handler.
+
+### Secrets setup (one-time after cloning)
+
+```bash
+cd dashboard-react
+npx wrangler secret put GITHUB_PAT              # GitHub PAT with gist scope
+npx wrangler secret put ADMIN_PASSCODE          # dashboard admin passcode
+# Optional: Firebase Admin (for Auth-level ban/delete)
+npx wrangler secret put FIREBASE_SERVICE_ACCOUNT  # JSON string
+```
 
 ### Live URL
 
-`https://deepseek-dashboard.bibzflow.workers.dev`
+`https://deepseek-dash.bibzflow.workers.dev`
 
 ### GitHub Gists (canonical)
 
@@ -656,11 +715,11 @@ placeholders.
 |------|------------|
 | 🔴 **Secrets committed in wrangler.toml + setup_deploy.py** (GH PAT, CF token, Firebase keys, admin passcode) | **Rotate them.** Use `wrangler secret put` instead of `[vars]` for sensitive values |
 | 🔴 **Firebase RTDB open rules** | Set `.read` / `.write` rules to authenticated-only before going public |
-| 🔴 **Worker template placeholders (`__HTML_B64__`)** | Always run `setup_deploy.py` before deploy — the raw worker.js won't serve anything |
 | 🟡 **Anti-stuck threshold (`MAX_SAME_TOOL = 50`)** | Could let model loop on same tool 50 times — consider lowering to 10 |
 | 🟡 **TOOL_TIMEOUT_DEFAULT = 0** | If a tool hangs, user waits forever — set > 0 for production |
 | 🟡 **AgentMetrics logs grow unbounded** | Rotate logs older than 30 days |
 | 🟢 **Gist ID changes break clients** | Never change `_DEFAULT_GIST_ID` in config.py |
+| 🟢 **Worker bundling `dist/`** | If `dist/` is missing, dashboard 404s on JS chunks — always run `npm run build` before deploy |
 
 ### Performance
 
@@ -671,13 +730,16 @@ placeholders.
 | Gist file edit race condition | Last-write-wins (rare; only relevant if 2 admins act simultaneously) |
 | Worker cold start | <5ms typically; not a concern |
 | IndexedDB / localStorage passcode | Stored client-side only; passcode never sent to server except for auth |
+| React bundle size | TanStack Query + lucide-react icons; total JS gzipped ~150KB |
+| Cloudflare Worker bundle limit | `worker.js` + assets bound separately — well under 1MB / 10MB limits |
 
 ### Pre-commit checklist
 
 Before committing any change:
 
 - [ ] `python -m py_compile deepseek/*.py` — no syntax errors
-- [ ] `node --check dashboard/worker.js` — JS syntax OK
+- [ ] `node --check dashboard-react/worker.js` — JS syntax OK
+- [ ] `cd dashboard-react && npm run build` — TypeScript compiles + Vite builds
 - [ ] No new mandatory deps (Termux compat)
 - [ ] No SIGALRM anywhere
 - [ ] No new Gist creation logic (only merge)
@@ -696,7 +758,8 @@ Before committing any change:
 git checkout -b feature/amazing-thing
 # ... make changes ...
 python -m py_compile deepseek/*.py
-node --check dashboard/worker.js
+node --check dashboard-react/worker.js
+cd dashboard-react && npm run build
 git add -p
 git commit -m "feat: add amazing thing"
 git push origin feature/amazing-thing
@@ -730,9 +793,10 @@ Closes #42
 ### Code style
 
 - **Python**: PEP 8, type hints encouraged, docstrings on public functions
-- **JS**: vanilla, no frameworks (we use what's in the worker), 2-space indent
-- **Naming**: snake_case (Python), camelCase (JS)
-- **Max line length**: 120 (Python), 100 (JS)
+- **TypeScript**: strict mode, no `any` in committed code, prefer named exports
+- **CSS**: vanilla CSS variables, BEM-ish naming, no Tailwind/CSS-in-JS
+- **Naming**: snake_case (Python), camelCase (JS/TS), kebab-case (CSS classes)
+- **Max line length**: 120 (Python), 100 (TS/JS)
 
 ---
 
@@ -750,7 +814,7 @@ pip install -e .             # dev mode
 
 - Check `X-Admin-Passcode` header matches what's in Gist `secrets.json`
 - Or matches `ADMIN_PASSCODE` env var in `wrangler.toml`
-- Default passcode: `XbibzOfficial777` (CHANGE IT)
+- Default passcode: `XbibzOfficial777` (CHANGE IT via dashboard Passcode modal)
 
 ### "Cannot connect to Gist"
 
@@ -761,6 +825,15 @@ curl -H "Authorization: token $GITHUB_PAT" \
 ```
 
 If 401: PAT expired → rotate at https://github.com/settings/tokens
+
+### Dashboard shows old UI / 404 on JS chunks
+
+```bash
+cd dashboard-react
+rm -rf dist node_modules/.vite
+npm run build
+npx wrangler deploy
+```
 
 ### "Update Available v7.8" but I'm on 7.7
 
@@ -787,6 +860,4 @@ See [README.md](./README.md) for full project docs.
 See [VERIFICATION_REPORT.md](./VERIFICATION_REPORT.md) for the 22-bug fix log.
 See [PROJECT_ANALYSIS.md](./PROJECT_ANALYSIS.md) for the codebase audit.
 
----
-
-**Last updated:** 2026-06-22 · **Version:** 7.7 · **Maintainer:** DeepSeek CLI team
+**Last updated:** 2026-06-23 · **Version:** 7.7 · **Maintainer:** DeepSeek CLI team
