@@ -524,24 +524,75 @@ if [ "$INSTALL_DIR" = "__INSTALL_DIR_PLACEHOLDER__" ]; then
 fi
 
 if [ ! -f "$INSTALL_DIR/deepseek/__init__.py" ]; then
-    echo -e "\033[31m  ✗ DeepSeek CLI not found!\033[0m"
+    echo -e "\033[31m  ✗ DeepSeek CLI not found at $INSTALL_DIR!\033[0m"
     echo -e "\033[2m  Run the installer again: bash install.sh\033[0m"
+    echo -e "\033[2m  Or: bash install.sh --clean && bash install.sh\033[0m"
     exit 1
 fi
 
-PYTHON=""
-if command -v python3 &>/dev/null; then
-    PYTHON="python3"
-elif command -v python &>/dev/null; then
-    PYTHON="python"
-else
-    echo -e "\033[31m  ✗ Python 3 not found!\033[0m"
+# ── Python selection ──
+# Prefer system python3 (the one that ran install.sh) so that the
+# active virtualenv doesn't shadow the deepseek package. If the user
+# explicitly wants to use their venv, they can set DEEPSEEK_PYTHON.
+PYTHON="${DEEPSEEK_PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+    # Resolve to absolute path: skip venv-managed pythons when possible.
+    for candidate in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+        if [ -x "$candidate" ]; then
+            PYTHON="$candidate"
+            break
+        fi
+    done
+    if [ -z "$PYTHON" ]; then
+        # Fallback to whatever python3 is on PATH (may include venv).
+        if command -v python3 >/dev/null 2>&1; then
+            PYTHON="$(command -v python3)"
+        elif command -v python >/dev/null 2>&1; then
+            PYTHON="$(command -v python)"
+        else
+            echo -e "\033[31m  ✗ Python 3 not found!\033[0m"
+            exit 1
+        fi
+    fi
+fi
+
+# ── Pre-flight check: verify deepseek module + deps are importable ──
+# Walk through candidate pythons (system, then PATH python3) until we
+# find one where both 'deepseek' and a core dependency (rich) work.
+# This handles: venv shadowing, missing deps in active env, etc.
+WORKING_PYTHON=""
+for try_python in "$PYTHON" /usr/bin/python3 /usr/local/bin/python3 "$(command -v python3 2>/dev/null)"; do
+    [ -z "$try_python" ] && continue
+    [ ! -x "$try_python" ] && continue
+    if "$try_python" -c "import sys; sys.path.insert(0, '$INSTALL_DIR'); import deepseek, rich" 2>/dev/null; then
+        WORKING_PYTHON="$try_python"
+        break
+    fi
+done
+
+if [ -z "$WORKING_PYTHON" ]; then
+    echo -e "\033[33m  ⚠ Could not find a Python where deepseek + deps work\033[0m"
+    echo -e "\033[2m  Tried: $PYTHON, /usr/bin/python3, /usr/local/bin/python3\033[0m"
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+        echo -e "\033[2m  Active venv: $VIRTUAL_ENV\033[0m"
+        echo -e "\033[33m  Fix — install into venv:\033[0m"
+        echo -e "\033[2m    pip install -e '$INSTALL_DIR' httpx rich pyyaml\033[0m"
+        echo -e "\033[2m    pip install duckduckgo-search PyPDF2 reportlab python-docx Pillow\033[0m"
+        echo -e "\033[2m    pip install beautifulsoup4 lxml mcp pydantic pytesseract\033[0m"
+    else
+        echo -e "\033[33m  Fix — reinstall system deps:\033[0m"
+        echo -e "\033[2m    bash install.sh --clean && bash install.sh\033[0m"
+    fi
     exit 1
 fi
+PYTHON="$WORKING_PYTHON"
 
 export DEEPSEEK_ORIGINAL_CWD="$PWD"
+# Add INSTALL_DIR to PYTHONPATH so 'python3 -m deepseek' works regardless
+# of CWD. (CWD is NOT in sys.path for '-m', so this is required.)
+export PYTHONPATH="$INSTALL_DIR${PYTHONPATH:+:$PYTHONPATH}"
 cd "$INSTALL_DIR"
-exec $PYTHON -m deepseek "$@"
+exec "$PYTHON" -m deepseek "$@"
 WRAPPER_EOF
 
 sed "s|__INSTALL_DIR_PLACEHOLDER__|$INSTALL_DIR|g" "$WRAPPER" > "$WRAPPER.tmp" && mv "$WRAPPER.tmp" "$WRAPPER"
