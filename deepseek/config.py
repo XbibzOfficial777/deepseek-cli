@@ -578,8 +578,13 @@ def enforce_gist():
     if is_banned:
         print("\n\033[1;31m██████████████████████████████████████████████████\033[0m", file=sys.stderr)
         print(f"\033[1;31mACCESS DENIED! IP {client_ip} has been BANNED.\033[0m", file=sys.stderr)
-        print("\033[1;31mPlease contact the network administrator to restore access.\033[0m", file=sys.stderr)
+        print("\033[1;31m──────────────────────────────────────────────────\033[0m", file=sys.stderr)
+        print("\033[1;31mTo appeal this ban, contact @XbibzOfficial on Telegram:\033[0m", file=sys.stderr)
+        print("\033[1;33m  → https://t.me/XbibzOfficial\033[0m", file=sys.stderr)
+        print("\033[2m  (Telegram opens automatically when you click the link)\033[0m", file=sys.stderr)
+        print("\033[1;31m──────────────────────────────────────────────────\033[0m", file=sys.stderr)
         print("\033[1;31m██████████████████████████████████████████████████\n\033[0m", file=sys.stderr)
+        sys.exit(1)
         sys.exit(1)
 
     # Check Limit state
@@ -587,10 +592,13 @@ def enforce_gist():
         print("\n\033[1;31m██████████████████████████████████████████████████\033[0m", file=sys.stderr)
         print("\033[1;31mACCESS DENIED! Token limit has been exceeded.\033[0m", file=sys.stderr)
         print(f"\033[1;31mConsumed: {total_tokens:,} / Limit: {token_limit:,} tokens.\033[0m", file=sys.stderr)
-        print("\033[1;31mPlease contact the network administrator to raise your limit.\033[0m", file=sys.stderr)
+        print("\033[1;31m──────────────────────────────────────────────────\033[0m", file=sys.stderr)
+        print("\033[1;31mTo request a limit increase, contact @XbibzOfficial:\033[0m", file=sys.stderr)
+        print("\033[1;33m  → https://t.me/XbibzOfficial\033[0m", file=sys.stderr)
+        print("\033[2m  (Telegram opens automatically when you click the link)\033[0m", file=sys.stderr)
+        print("\033[1;31m──────────────────────────────────────────────────\033[0m", file=sys.stderr)
         print("\033[1;31m██████████████████████████████████████████████████\n\033[0m", file=sys.stderr)
         sys.exit(1)
-
     # Register client if not found
     if not result.get("found", False):
         try:
