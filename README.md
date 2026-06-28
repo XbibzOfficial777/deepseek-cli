@@ -330,6 +330,8 @@ deepseek/
 | `/info` | Show current configuration |
 | `/compact` | Compact conversation (keep system + last 10) |
 | `/session` | List/manage saved sessions |
+| `/rename` | Rename the current or a saved session |
+| `/remind <seconds> [message]` | Set an in-terminal reminder |
 | `/live_search <query>` | Real-time web search (multi-source) |
 | `/live_models` | Fetch all models from provider API |
 | `/search_model` | Search/filter models from provider API |

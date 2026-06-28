@@ -12,13 +12,21 @@ import atexit
 warnings.filterwarnings("ignore")
 
 from .memory import list_sessions, delete_session, new_session_id
-from .repl import main as repl_main
 from .ui import console
-from .selenium_browser import close_selenium_session
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
+
+def _close_selenium_session_lazy():
+    """Import Selenium cleanup only on process exit to keep startup lighter."""
+    try:
+        from .selenium_browser import close_selenium_session
+        close_selenium_session()
+    except Exception:
+        pass
+
+
 # Ensure orphaned browser sessions are closed on exit
-atexit.register(close_selenium_session)
+atexit.register(_close_selenium_session_lazy)
 
 CLI_EPILOG = '''Examples:
   dscli                          Start the interactive CLI
@@ -347,6 +355,8 @@ def main():
     from .config import enforce_gist
     enforce_gist()
 
+    # Import the full REPL only when we are actually entering interactive mode.
+    from .repl import main as repl_main
     repl_main(session_id=session_id, memory=memory, user=user)
 
 
