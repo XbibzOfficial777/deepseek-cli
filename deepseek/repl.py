@@ -379,7 +379,6 @@ def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) 
 
     # ── Bare "/" → show help ──────────
     if command == '/':
-        from .ui import show_help
         show_help()
         return ''
 
