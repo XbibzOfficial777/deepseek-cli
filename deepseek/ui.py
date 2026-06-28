@@ -88,36 +88,108 @@ _input_history: list = []
 _input_history_idx: int = -1
 _input_temp_buffer: str = ''
 
-# ── Slash commands list for Tab completion ──
+# ── Slash command reference / completion ──
+HELP_SECTIONS = [
+    (
+        'Navigation',
+        [
+            ('Ctrl+P', 'Open the interactive settings panel'),
+            ('Ctrl+X', 'Toggle session/sub-agent history view'),
+        ],
+    ),
+    (
+        'Core',
+        [
+            ('/help, /h, /?', 'Show help and command reference'),
+            ('/version', 'Show version and runtime capabilities'),
+            ('/info', 'Show current provider, model, tools, and usage status'),
+            ('/thinking', 'Toggle visibility of reasoning / thinking output'),
+            ('/clear', 'Clear the current conversation'),
+            ('/compact', 'Keep system prompt + last 10 conversation messages'),
+            ('/export [file]', 'Export chat to .txt, .md, or .html'),
+            ('/system <prompt>', 'Append/update the system prompt'),
+            ('/exit, /quit, /q', 'Exit the CLI'),
+        ],
+    ),
+    (
+        'Project & skills',
+        [
+            ('/init', 'Scan the current project and generate AGENTS.md'),
+            ('/install <package>', 'Install a skill via npx/npm'),
+            ('/skills', 'List and manage installed skills'),
+            ('/tools', 'List all available built-in tools'),
+        ],
+    ),
+    (
+        'Provider & model',
+        [
+            ('/provider [id]', 'Switch AI provider interactively or directly'),
+            ('/model [id]', 'Switch model interactively or directly'),
+            ('/models', 'List available models for the current provider'),
+            ('/key', 'Set or replace API key for the current provider'),
+            ('/k, /context', 'Show estimated context/token usage'),
+            ('/live_models', 'Fetch live models from the provider API'),
+            ('/search_model <query>', 'Search/filter provider models'),
+        ],
+    ),
+    (
+        'Agent, search & automation',
+        [
+            ('/live_search <query>', 'Run a live web search'),
+            ('/agent [profile|list]', 'Switch or inspect multi-agent profiles'),
+            ('/mcp [action]', 'Manage MCP servers and tools'),
+            ('/connectors', 'Show Telegram/Discord connector status'),
+            ('/telegram [action]', 'Manage the Telegram connector'),
+            ('/discord [action]', 'Manage the Discord connector'),
+        ],
+    ),
+    (
+        'Sessions & utilities',
+        [
+            ('/session', 'List saved sessions or delete one'),
+            ('/rename <name>', 'Rename the current session'),
+            ('/rename <session_id> <name>', 'Rename a specific saved session'),
+            ('/remind <seconds> [message]', 'Create an in-terminal reminder'),
+        ],
+    ),
+]
+
 SLASH_COMMANDS = [
-    ('/help',          'Show this help message'),
-    ('/version',       'Show version and capabilities'),
-    ('/k',             'Show token/context usage'),
-    ('/context',       'Show token/context usage'),
-    ('/init',          'Scan project & create AGENTS.md'),
-    ('/install',       'Install a skill (npx skills add)'),
-    ('/skills',        'List/manage installed skills'),
-    ('/tools',         'Show all available tools'),
-    ('/clear',         'Clear conversation history'),
-    ('/export',        'Export chat to text file'),
-    ('/system',        'Update system prompt'),
-    ('/provider',      'Switch AI provider'),
-    ('/model',         'Switch model'),
-    ('/key',           'Set API key'),
-    ('/models',        'List available models'),
-    ('/info',          'Show current config info'),
-    ('/thinking',      'Toggle thinking/reasoning visibility'),
-    ('/compact',       'Compact conversation (keep system + last 10)'),
-    ('/live_search',   'Live web search'),
-    ('/live_models',   'Fetch all models from provider API'),
-    ('/search_model',  'Search/filter models from provider API'),
-    ('/agent',         'Switch agent profile'),
-    ('/session',       'List/delete saved sessions'),
-    ('/connectors',    'Show connectors status'),
-    ('/telegram',      'Telegram connector menu'),
-    ('/discord',       'Discord connector menu'),
-    ('/mcp',           'MCP server management'),
-    ('/exit',          'Exit the CLI'),
+    ('/help', 'Show help and command reference'),
+    ('/h', 'Alias of /help'),
+    ('/?', 'Alias of /help'),
+    ('/version', 'Show version and runtime capabilities'),
+    ('/k', 'Show estimated context/token usage'),
+    ('/context', 'Alias of /k'),
+    ('/init', 'Scan project and create AGENTS.md'),
+    ('/install', 'Install a skill via npx/npm'),
+    ('/skills', 'List/manage installed skills'),
+    ('/tools', 'Show all available tools'),
+    ('/clear', 'Clear conversation history'),
+    ('/export', 'Export chat to file'),
+    ('/system', 'Update system prompt'),
+    ('/provider', 'Switch AI provider'),
+    ('/model', 'Switch model'),
+    ('/key', 'Set API key'),
+    ('/models', 'List available models'),
+    ('/info', 'Show current config info'),
+    ('/thinking', 'Toggle thinking visibility'),
+    ('/compact', 'Compact conversation memory'),
+    ('/live_search', 'Live web search'),
+    ('/live_models', 'Fetch models from provider API'),
+    ('/search_model', 'Search/filter provider models'),
+    ('/agent', 'Switch agent profile'),
+    ('/session', 'List/delete saved sessions'),
+    ('/sessions', 'Alias of /session'),
+    ('/rename', 'Rename a session'),
+    ('/remind', 'Create an in-terminal reminder'),
+    ('/connectors', 'Show connectors status'),
+    ('/telegram', 'Telegram connector menu'),
+    ('/discord', 'Discord connector menu'),
+    ('/mcp', 'MCP server management'),
+    ('/exit', 'Exit the CLI'),
+    ('/quit', 'Alias of /exit'),
+    ('/q', 'Alias of /exit'),
 ]
 
 # ══════════════════════════════════════
@@ -2415,18 +2487,23 @@ def show_welcome(provider_name: str, model: str, has_key: bool):
 
 
 def show_help():
-    """Display help / available commands."""
-    table = Table(title='Commands', box=box.ROUNDED, show_lines=False,
-                  border_style='cyan', title_style='bold cyan')
-    table.add_column('Command', style='bold green', min_width=18)
-    table.add_column('Description', style='white')
-
-    table.add_row('Ctrl+P', 'Open settings panel')
-    for cmd, desc in SLASH_COMMANDS:
-        table.add_row(cmd, desc)
-
-    console.print(table)
+    """Display a complete help/reference table for all user-facing commands."""
+    console.print(Panel.fit(
+        '[bold cyan]DeepSeek CLI Command Reference[/bold cyan]\n'
+        '[dim]Tip:[/dim] type [bold]/[/bold] or press [bold]Tab[/bold] after a slash for command completion.',
+        border_style='cyan',
+    ))
     console.print()
+
+    for section, rows in HELP_SECTIONS:
+        table = Table(title=section, box=box.ROUNDED, show_lines=False,
+                      border_style='cyan', title_style='bold cyan')
+        table.add_column('Command', style='bold green', min_width=28)
+        table.add_column('Description', style='white')
+        for cmd, desc in rows:
+            table.add_row(cmd, desc)
+        console.print(table)
+        console.print()
 
 
 def show_version():

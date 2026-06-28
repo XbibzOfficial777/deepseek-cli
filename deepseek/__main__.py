@@ -12,13 +12,61 @@ import atexit
 warnings.filterwarnings("ignore")
 
 from .memory import list_sessions, delete_session, new_session_id
-from .repl import main as repl_main
 from .ui import console
-from .selenium_browser import close_selenium_session
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 
+
+def _close_selenium_session_lazy():
+    """Import Selenium cleanup only on process exit to keep startup lighter."""
+    try:
+        from .selenium_browser import close_selenium_session
+        close_selenium_session()
+    except Exception:
+        pass
+
+
 # Ensure orphaned browser sessions are closed on exit
-atexit.register(close_selenium_session)
+atexit.register(_close_selenium_session_lazy)
+
+CLI_EPILOG = '''Examples:
+  dscli                          Start the interactive CLI
+  dscli help                     Show CLI help
+  dscli list session            List saved sessions
+  dscli -s dscli-xxxxxxxxxxxx   Resume a saved session
+  dscli -d dscli-xxxxxxxxxxxx   Delete a saved session
+  dscli install find-skills     Install a skill package
+
+Inside the interactive REPL use /help for the full slash-command reference.
+'''
+
+
+def _build_parser():
+    parser = argparse.ArgumentParser(
+        prog='dscli',
+        description='DeepSeek CLI Agent v7.7',
+        epilog=CLI_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument('-s', '--session', metavar='SESSION_ID',
+                        help='Continue an existing session (e.g. dscli-xxxxxxxxxxxx)')
+    parser.add_argument('-d', '--delete', metavar='SESSION_ID',
+                        help='Delete a saved session')
+    parser.add_argument('-l', '--list', action='store_true',
+                        help='List all saved sessions')
+    parser.add_argument('--uninstall-full', action='store_true',
+                        help='Completely uninstall DeepSeek CLI (config, sessions, logs, wrapper)')
+    parser.add_argument('command', nargs='*',
+                        help='Commands: help | list session | delete <id> | logout | uninstall-full')
+    return parser
+
+
+def _show_cli_help(parser):
+    parser.print_help()
+    print()
+    print('Extra notes:')
+    print('  - `dscli help` and `dscli /help` both show CLI help.')
+    print('  - After launching the REPL, run `/help` for the full interactive command list.')
+
 
 def _run_cmd_with_progress(cmd, desc='Running', stdin_input='y\n'):
     # Auto-add --yes right after npx to skip "Ok to proceed?" prompt
@@ -246,17 +294,7 @@ def main():
         return
 
     # Normal argparse for other commands
-    parser = argparse.ArgumentParser(prog='dscli', description='DeepSeek CLI Agent v7.7')
-    parser.add_argument('-s', '--session', metavar='SESSION_ID',
-                        help='Continue an existing session (e.g. dscli-xxxxxxxxxxxx)')
-    parser.add_argument('-d', '--delete', metavar='SESSION_ID',
-                        help='Delete a saved session')
-    parser.add_argument('-l', '--list', action='store_true',
-                        help='List all saved sessions')
-    parser.add_argument('--uninstall-full', action='store_true',
-                        help='Completely uninstall DeepSeek CLI (config, sessions, logs, wrapper)')
-    parser.add_argument('command', nargs='*',
-                        help='Command: list session / delete <id>')
+    parser = _build_parser()
     args = parser.parse_args()
 
     # Handle --uninstall-full
@@ -268,7 +306,10 @@ def main():
         cmd0 = args.command[0].lower() if args.command else ''
         cmd1 = args.command[1] if len(args.command) > 1 else ''
 
-        if cmd0 == 'logout':
+        if cmd0 in ('help', '/help', '?'):
+            _show_cli_help(parser)
+            return
+        elif cmd0 == 'logout':
             from .auth import logout
             logout()
             print('Logged out. You will be asked to sign in next time you run dscli.')
@@ -285,6 +326,7 @@ def main():
             return _cmd_uninstall_full()
         else:
             print(f'Unknown command: {" ".join(args.command)}', file=sys.stderr)
+            print('Tip: use `dscli help` or `dscli --help` to see available CLI commands.', file=sys.stderr)
             sys.exit(1)
 
     if args.list:
@@ -313,6 +355,8 @@ def main():
     from .config import enforce_gist
     enforce_gist()
 
+    # Import the full REPL only when we are actually entering interactive mode.
+    from .repl import main as repl_main
     repl_main(session_id=session_id, memory=memory, user=user)
 
 

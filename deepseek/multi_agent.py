@@ -1,14 +1,14 @@
 # DeepSeek CLI v7.7 — Multi-Agent System
 # Agent delegation, specialized profiles, and concurrent execution
 
+from __future__ import annotations
+
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import cfg
 from .memory import Memory
-from .toolkit import ToolRegistry
-from .providers import create_provider
 
 
 # ══════════════════════════════════════
@@ -115,6 +115,7 @@ class AgentWorker:
         pid = provider_id or cfg.active_provider
         provider_config = cfg.get_provider_config(pid)
         api_key = cfg.get_api_key(pid)
+        from .providers import create_provider
         self.provider = create_provider(pid, provider_config, api_key)
         self.model = model or cfg.get_provider_model(pid)
 
