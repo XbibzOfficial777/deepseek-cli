@@ -7,12 +7,13 @@ build/
 dist/
 
 # ─── React / Vite / Dashboard ────────────────────────────────────
-# Dashboard is a separate Cloudflare Worker project — NOT part of the CLI repo.
-# Source kept locally; deploy via `cd dashboard-react && npx wrangler deploy`.
-dashboard-react/
+# Keep dashboard source + Worker config in git, but ignore generated assets.
 dashboard/
+dashboard-react/node_modules/
+dashboard-react/dist/
 dashboard-react/.vite/
 dashboard-react/.wrangler/
+dashboard-react/.dev.vars
 
 # ─── OS ────────────────────────────────────────────────────────────
 .DS_Store
