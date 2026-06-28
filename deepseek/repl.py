@@ -9,6 +9,7 @@ import sys
 import traceback
 import threading
 import datetime
+import re
 from rich.console import Console
 from rich.table import Table
 from rich import box
@@ -61,6 +62,28 @@ VERSION_BANNER = 'DeepSeek CLI Agent v7.7'
 VERSION_FEATURES = 'Multi-Provider | 7 AI Services | 80+ Tools | Real-Time Stream | Rich Markdown | Web Browser | Smart Loop | OCR | Telegram & Discord | Auth Automation'
 
 
+def _sync_active_profile_prompt(memory):
+    """Ensure only the currently active multi-agent profile prompt is attached once."""
+    from .multi_agent import AGENT_PROFILES, multi_agent_manager
+
+    prompt = memory.system_prompt or ''
+    for info in AGENT_PROFILES.values():
+        extra = (info.get('system_prompt_extra', '') or '').strip()
+        if extra:
+            prompt = prompt.replace('\n' + extra, '\n')
+            prompt = prompt.replace(extra + '\n', '\n')
+            prompt = prompt.replace(extra, '')
+
+    prompt = re.sub(r'\n{3,}', '\n\n', prompt).strip()
+    active_extra = (multi_agent_manager.get_system_extra() or '').strip()
+    if active_extra:
+        prompt = (prompt + '\n' + active_extra).strip()
+
+    memory.system_prompt = prompt
+    if memory.messages and memory.messages[0]['role'] == 'system':
+        memory.messages[0]['content'] = memory.system_prompt
+
+
 def main(session_id: str = None, memory=None, user=None):
     """Main entry point — start the REPL."""
     show_banner()
@@ -92,11 +115,7 @@ def main(session_id: str = None, memory=None, user=None):
 
     # Initialize multi-agent profile
     from .multi_agent import multi_agent_manager
-    profile_extra = multi_agent_manager.get_system_extra()
-    if profile_extra:
-        memory.system_prompt += '\n' + profile_extra
-        if memory.messages and memory.messages[0]['role'] == 'system':
-            memory.messages[0]['content'] = memory.system_prompt
+    _sync_active_profile_prompt(memory)
 
     agent = Agent(memory, tools, provider, model, thinking_visible=True)
 
@@ -567,11 +586,7 @@ def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) 
                     console.print(f'  {info["emoji"]} [bold]{pid}[/bold] — {info["description"]}{active}')
             elif arg in AGENT_PROFILES:
                 multi_agent_manager.set_profile(arg)
-                extra = multi_agent_manager.get_system_extra()
-                if extra:
-                    memory.system_prompt += '\n' + extra
-                    if memory.messages and memory.messages[0]['role'] == 'system':
-                        memory.messages[0]['content'] = memory.system_prompt
+                _sync_active_profile_prompt(memory)
                 console.print(f'  [green]Switched to {AGENT_PROFILES[arg]["emoji"]} {AGENT_PROFILES[arg]["name"]} agent.[/green]')
             else:
                 console.print(f'  [yellow]Unknown profile: {arg}. Use /agent list[/yellow]')
@@ -588,11 +603,7 @@ def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) 
             if idx >= 0:
                 selected = names[idx]
                 multi_agent_manager.set_profile(selected)
-                extra = multi_agent_manager.get_system_extra()
-                if extra:
-                    memory.system_prompt += '\n' + extra
-                    if memory.messages and memory.messages[0]['role'] == 'system':
-                        memory.messages[0]['content'] = memory.system_prompt
+                _sync_active_profile_prompt(memory)
                 console.print(f'  [green]Switched to {AGENT_PROFILES[selected]["emoji"]} {AGENT_PROFILES[selected]["name"]} agent.[/green]')
         console.print()
 
@@ -634,21 +645,35 @@ def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) 
         from .memory import _session_path
         from rich.markup import escape
         import json
-        rparts = args.split(maxsplit=1)
         if not args:
             console.print('  [yellow]Usage: /rename <new_name> or /rename <session_id> <new_name>[/yellow]')
             console.print()
             return ''
+
+        current_sid = getattr(memory, '_current_session_id', None)
+        rparts = args.split(maxsplit=1)
+        candidate_sid = rparts[0] if rparts else ''
+        candidate_path = _session_path(candidate_sid) if candidate_sid else ''
+
         if len(rparts) == 1:
-            sid = getattr(memory, '_current_session_id', None)
-            new_name = rparts[0]
+            sid = current_sid
+            new_name = args.strip()
+        elif candidate_sid and os.path.exists(candidate_path):
+            sid = candidate_sid
+            new_name = rparts[1].strip()
         else:
-            sid = rparts[0]
-            new_name = rparts[1]
+            sid = current_sid
+            new_name = args.strip()
+
         if not sid:
             console.print('  [red]No current session.[/red]')
             console.print()
             return ''
+        if not new_name:
+            console.print('  [red]New session name cannot be empty.[/red]')
+            console.print()
+            return ''
+
         path = _session_path(sid)
         if not os.path.exists(path):
             console.print(f'  [red]Session {sid} not found.[/red]')
@@ -659,7 +684,7 @@ def handle_command(cmd: str, agent: Agent, memory: Memory, tools: ToolRegistry) 
         data['session_name'] = new_name
         with open(path, 'w') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        if sid == getattr(memory, '_current_session_id', None):
+        if sid == current_sid:
             memory.session_name = new_name
             memory._session_named = True
         console.print(f'  [green]Session renamed to:[/green] [bold yellow]{escape(new_name)}[/bold yellow]')
@@ -829,11 +854,7 @@ def _settings_switch_profile(agent, memory):
     if idx >= 0:
         selected = names[idx]
         multi_agent_manager.set_profile(selected)
-        extra = multi_agent_manager.get_system_extra()
-        if extra:
-            memory.system_prompt += '\n' + extra
-            if memory.messages and memory.messages[0]['role'] == 'system':
-                memory.messages[0]['content'] = memory.system_prompt
+        _sync_active_profile_prompt(memory)
         console.print(f'  [green]Switched to {AGENT_PROFILES[selected]["emoji"]} {AGENT_PROFILES[selected]["name"]} agent.[/green]')
     else:
         console.print('  [dim]Cancelled.[/dim]')
