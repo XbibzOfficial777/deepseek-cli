@@ -10,6 +10,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from deepseek.__main__ import _build_parser
+from deepseek.repl import handle_command
 from deepseek.ui import HELP_SECTIONS, SLASH_COMMANDS, show_help
 
 
@@ -67,3 +68,21 @@ def test_show_help_renders_complete_reference():
     assert '/remind' in output and 'Create an in-terminal reminder' in output
     assert '/rename' in output and 'Rename the current session' in output
     assert '/exit' in output and '/quit' in output and '/q' in output
+
+
+def test_handle_command_help_aliases_do_not_crash():
+    from deepseek import ui
+
+    buffer = io.StringIO()
+    original_console = ui.console
+    ui.console = Console(file=buffer, force_terminal=False, width=140)
+    try:
+        assert handle_command('/help', None, None, None) == ''
+        assert handle_command('/h', None, None, None) == ''
+        assert handle_command('/?', None, None, None) == ''
+        assert handle_command('/', None, None, None) == ''
+    finally:
+        ui.console = original_console
+
+    output = buffer.getvalue()
+    assert 'DeepSeek CLI Command Reference' in output
