@@ -3774,14 +3774,9 @@ class ToolRegistry:
                     'FIX: Use browser_navigate, browser_snapshot, and other browser_* tools instead.')
 
     def _register_selenium_tools(self):
-        # Check availability (don't register if missing)
-        try:
-            from .selenium_browser import SELENIUM_AVAILABLE
-            if not SELENIUM_AVAILABLE:
-                return
-        except ImportError:
-            return
-
+        # Register Selenium tool entrypoints lazily.
+        # The heavy selenium_browser module is imported only when a selenium tool
+        # is actually called, which keeps normal CLI startup lighter.
         self.register(
             'se_navigate',
             'SELENIUM BROWSER: Open a URL in a real Firefox browser. '
